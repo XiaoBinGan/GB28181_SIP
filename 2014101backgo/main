@@ -1,0 +1,66 @@
+package main
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"strings"
+)
+
+// 处理并转发SIP消息的函数
+func handleSIPMessage(conn *net.UDPConn, addr *net.UDPAddr, data []byte, targetAddr *net.UDPAddr) {
+	message := string(data)
+	fmt.Println("Received SIP message from", addr.IP.String(), ":", message)
+
+	// 如果需要对SIP消息进行修改，可以在这里处理
+	// 例如替换目标地址等
+	if strings.Contains(message, "INVITE") {
+		fmt.Println("Forwarding INVITE message")
+	}
+
+	// 将消息转发到目标服务器
+	_, err := conn.WriteToUDP(data, targetAddr)
+	if err != nil {
+		fmt.Println("Failed to forward SIP message:", err)
+	}
+}
+
+func main() {
+	// 监听SIP消息的UDP地址
+	listenAddr, err := net.ResolveUDPAddr("udp", ":5060")
+	if err != nil {
+		fmt.Println("Failed to resolve listening address:", err)
+		os.Exit(1)
+	}
+
+	// 创建监听连接
+	conn, err := net.ListenUDP("udp", listenAddr)
+	if err != nil {
+		fmt.Println("Failed to listen on SIP port:", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	// 定义目标服务器的地址
+	targetAddr, err := net.ResolveUDPAddr("udp", "192.168.1.100:5060")
+	if err != nil {
+		fmt.Println("Failed to resolve target address:", err)
+		os.Exit(1)
+	}
+
+	buffer := make([]byte, 1500)
+
+	fmt.Println("SIP Proxy is running on port 5060 and forwarding to", targetAddr)
+
+	for {
+		// 读取来自客户端的SIP消息
+		n, addr, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			fmt.Println("Error receiving data:", err)
+			continue
+		}
+
+		// 处理并转发SIP消息
+		go handleSIPMessage(conn, addr, buffer[:n], targetAddr)
+	}
+}

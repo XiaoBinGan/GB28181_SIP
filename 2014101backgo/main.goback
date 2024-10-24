@@ -1,0 +1,125 @@
+package main
+
+import (
+	"fmt"
+	"net"
+	"time"
+)
+
+// SIP消息的模板
+
+func createSIPRegisterMessage(deviceID, localIP, serverIP, serverPort, sipDomain string) string {
+	return fmt.Sprintf(
+		"REGISTER sip:%s SIP/2.0\r\n"+
+			"Via: SIP/2.0/UDP %s;branch=z9hG4bK776asdhds\r\n"+
+			"Max-Forwards: 70\r\n"+
+			"To: <sip:%s@%s>\r\n"+
+			"From: <sip:%s@%s>;tag=12345\r\n"+
+			"Call-ID: admin@%s\r\n"+
+			"CSeq: 1 REGISTER\r\n"+
+			"Contact: <sip:%s@%s>\r\n"+
+			"Expires: 3600\r\n"+
+			"Content-Length: 0\r\n\r\n",
+		sipDomain, localIP, deviceID, sipDomain, deviceID, sipDomain, localIP, deviceID, localIP)
+}
+
+func main() {
+	// 配置部分
+	serverIP := "100.100.137.130"      // SIP服务器的IP地址
+	serverPort := "5060"               // SIP服务器的端口
+	deviceID := "34020000002000000001" // 设备ID，GB28181的设备编号
+	sipDomain := "3402000000"          // SIP域，GB28181的SIP服务器域
+
+	// 创建UDP连接
+	conn, err := net.Dial("udp", net.JoinHostPort(serverIP, serverPort))
+	if err != nil {
+		fmt.Println("无法连接到SIP服务器:", err)
+		return
+	}
+	defer conn.Close()
+
+	// 获取本地IP地址
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	localIP := localAddr.IP.String()
+
+	// 生成SIP REGISTER消息
+	registerMessage := createSIPRegisterMessage(deviceID, localIP, serverIP, serverPort, sipDomain)
+	fmt.Println("发送SIP REGISTER消息:")
+	fmt.Println(registerMessage)
+
+	// 发送SIP REGISTER消息
+	_, err = conn.Write([]byte(registerMessage))
+	if err != nil {
+		fmt.Println("发送失败:", err)
+		return
+	}
+
+	// 接收响应
+	buffer := make([]byte, 1024)
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) // 设置5秒的超时
+	n, err := conn.Read(buffer)
+	if err != nil {
+		fmt.Println("读取响应失败:", err)
+		return
+	}
+
+	// 打印接收到的响应
+	fmt.Printf("收到的响应:\n%s", string(buffer[:n]))
+}
+
+// // SIP消息的模板
+// func createSIPRegisterMessage(deviceID, serverIP, serverPort, sipDomain string) string {
+// 	return fmt.Sprintf(
+// 		"REGISTER sip:%s SIP/2.0\r\n"+
+// 			"Via: SIP/2.0/UDP %s;branch=z9hG4bK776asdhds\r\n"+
+// 			"Max-Forwards: 70\r\n"+
+// 			"To: <sip:%s@%s>\r\n"+
+// 			"From: <sip:%s@%s>;tag=12345\r\n"+
+// 			"Call-ID: admin@%s\r\n"+
+// 			"CSeq: 1 REGISTER\r\n"+
+// 			"Contact: <sip:%s@%s>\r\n"+
+// 			"Expires: 3600\r\n"+
+// 			"Content-Length: 0\r\n\r\n",
+// 		sipDomain, serverIP, deviceID, sipDomain, deviceID, sipDomain, serverIP, deviceID, serverIP)
+// }
+
+// func main() {
+// 	// 配置部分
+// 	serverIP := "100.100.137.130"      // SIP服务器的IP地址
+// 	serverPort := "5060"               // SIP服务器的端口
+// 	deviceID := "34020000002000000001" // 设备ID，GB28181的设备编号
+// 	sipDomain := "3402000000"          // SIP域，GB28181的SIP服务器域
+
+// 	// 创建UDP连接
+// 	conn, err := net.Dial("udp", net.JoinHostPort(serverIP, serverPort))
+// 	if err != nil {
+// 		fmt.Println("无法连接到SIP服务器:", err)
+// 		return
+// 	}
+// 	defer conn.Close()
+
+// 	// 生成SIP REGISTER消息
+// 	registerMessage := createSIPRegisterMessage(deviceID, serverIP, serverPort, sipDomain)
+// 	fmt.Println("发送SIP REGISTER消息:")
+// 	fmt.Println(registerMessage)
+
+// 	// 发送SIP REGISTER消息
+// 	_, err = conn.Write([]byte(registerMessage))
+// 	if err != nil {
+// 		fmt.Println("发送失败:", err)
+// 		return
+// 	}
+
+// 	// 接收响应
+// 	buffer := make([]byte, 1024)
+// 	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // 设置5秒的超时
+// 	n, err := conn.Read(buffer)
+// 	if err != nil {
+// 		fmt.Println("读取响应失败:", err)
+// 		return
+// 	}
+
+//		// 打印接收到的响应
+//		fmt.Printf("收到的响应:\n%s", string(buffer[:n]))
+//	}
+//

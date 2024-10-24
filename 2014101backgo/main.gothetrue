@@ -1,0 +1,1066 @@
+package main
+
+import (
+	"encoding/xml"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"time"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
+)
+
+// Device 表示目录中的单个设备
+type Device struct {
+	DeviceID     string `xml:"DeviceID"`
+	Name         string `xml:"Name"`
+	Manufacturer string `xml:"Manufacturer"`
+	Model        string `xml:"Model"`
+}
+
+// DeviceListResponse 表示目录响应的XML结构
+type DeviceListResponse struct {
+	XMLName  xml.Name `xml:"Response"`
+	CmdType  string   `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	SumNum   int      `xml:"SumNum"`
+	Devices  []Device `xml:"DeviceList>Item"`
+}
+
+// Keepalive 表示保活通知的XML结构
+type Keepalive struct {
+	XMLName  xml.Name `xml:"Notify"`
+	CmdType  string   `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	Status   string   `xml:"Status"`
+	Info     struct {
+		DeviceIDs []string `xml:"DeviceID"`
+	} `xml:"Info"`
+}
+
+// Config 存储SIP客户端配置
+type Config struct {
+	NvrID         string
+	SipServerAddr string
+	LocalAddr     string
+}
+
+// SIPClient 表示我们的SIP客户端
+type SIPClient struct {
+	Config Config
+	Conn   *net.UDPConn
+}
+
+// NewSIPClient 创建一个新的SIP客户端
+func NewSIPClient(config Config) (*SIPClient, error) {
+	addr, err := net.ResolveUDPAddr("udp", config.LocalAddr)
+	if err != nil {
+		return nil, fmt.Errorf("解析本地地址失败: %v", err)
+	}
+
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("监听UDP端口失败: %v", err)
+	}
+
+	return &SIPClient{
+		Config: config,
+		Conn:   conn,
+	}, nil
+}
+
+// SendCatalogQuery 向NVR发送目录查询
+func (c *SIPClient) SendCatalogQuery() error {
+	message := fmt.Sprintf(`<?xml version="1.0"?>
+<Query>
+	<CmdType>Catalog</CmdType>
+	<SN>%d</SN>
+	<DeviceID>%s</DeviceID>
+</Query>`, time.Now().Unix(), c.Config.NvrID)
+
+	sipMessage := fmt.Sprintf(
+		"MESSAGE sip:%s@%s SIP/2.0\r\n"+
+			"Via: SIP/2.0/UDP %s;branch=z9hG4bK%d\r\n"+
+			"From: <sip:client@%s>;tag=%d\r\n"+
+			"To: <sip:%s@%s>\r\n"+
+			"Call-ID: %d\r\n"+
+			"CSeq: 1 MESSAGE\r\n"+
+			"Content-Type: Application/MANSCDP+xml\r\n"+
+			"Max-Forwards: 70\r\n"+
+			"User-Agent: GBDeviceClient\r\n"+
+			"Content-Length: %d\r\n"+
+			"\r\n"+
+			"%s",
+		c.Config.NvrID, c.Config.SipServerAddr,
+		c.Config.LocalAddr, time.Now().UnixNano(),
+		c.Config.LocalAddr, time.Now().UnixNano(),
+		c.Config.NvrID, c.Config.SipServerAddr,
+		time.Now().UnixNano(),
+		len(message),
+		message)
+
+	serverAddr, err := net.ResolveUDPAddr("udp", c.Config.SipServerAddr)
+	if err != nil {
+		return fmt.Errorf("解析服务器地址失败: %v", err)
+	}
+
+	_, err = c.Conn.WriteToUDP([]byte(sipMessage), serverAddr)
+	if err != nil {
+		return fmt.Errorf("发送SIP消息失败: %v", err)
+	}
+
+	fmt.Println("目录查询已发送至NVR")
+	return nil
+}
+
+// HandleSIPMessage 处理传入的SIP消息
+func (c *SIPClient) HandleSIPMessage(msg []byte, addr *net.UDPAddr) {
+	if len(msg) == 0 {
+		fmt.Println("收到空SIP消息")
+		return
+	}
+
+	lines := strings.Split(string(msg), "\r\n")
+	if len(lines) > 0 {
+		if strings.HasPrefix(lines[0], "SIP/2.0") {
+			fmt.Println("收到SIP响应:", lines[0])
+		} else {
+			parts := strings.Split(lines[0], " ")
+			if len(parts) > 0 {
+				method := parts[0]
+				fmt.Printf("收到SIP请求，方法: %s，来自: %s\n", method, addr.String())
+
+				if method == "REGISTER" {
+					c.handleRegister(msg, addr)
+				} else if method == "MESSAGE" {
+					c.handleMessage(msg, addr)
+				}
+			}
+		}
+	}
+}
+
+// handleRegister 处理REGISTER请求
+func (c *SIPClient) handleRegister(msg []byte, addr *net.UDPAddr) {
+	response := "SIP/2.0 200 OK\r\n" +
+		"Via: " + getHeader(msg, "Via") + "\r\n" +
+		"From: " + getHeader(msg, "From") + "\r\n" +
+		"To: " + getHeader(msg, "To") + "\r\n" +
+		"Call-ID: " + getHeader(msg, "Call-ID") + "\r\n" +
+		"CSeq: " + getHeader(msg, "CSeq") + "\r\n" +
+		"Contact: " + getHeader(msg, "Contact") + "\r\n" +
+		"Content-Length: 0\r\n\r\n"
+
+	_, err := c.Conn.WriteToUDP([]byte(response), addr)
+	if err != nil {
+		fmt.Printf("发送REGISTER响应失败: %v\n", err)
+	} else {
+		fmt.Printf("200 OK响应已发送至 %s\n", addr.String())
+	}
+}
+
+// handleMessage 处理MESSAGE请求
+func (c *SIPClient) handleMessage(msg []byte, addr *net.UDPAddr) {
+	bodyStart := strings.Index(string(msg), "\r\n\r\n")
+	if bodyStart != -1 {
+		body := string(msg[bodyStart+4:])
+		fmt.Println("收到MESSAGE正文:")
+		fmt.Println(body)
+
+		if strings.Contains(body, "<Notify>") && strings.Contains(body, "<CmdType>Keepalive</CmdType>") {
+			c.handleKeepalive(body)
+		} else if strings.Contains(body, "<Response>") && strings.Contains(body, "<DeviceList>") {
+			c.handleDeviceList(body)
+		} else {
+			fmt.Println("收到未知消息类型")
+		}
+	} else {
+		fmt.Println("在MESSAGE请求中未找到消息正文")
+	}
+
+	// 发送200 OK响应
+	response := "SIP/2.0 200 OK\r\n" +
+		"Via: " + getHeader(msg, "Via") + "\r\n" +
+		"From: " + getHeader(msg, "From") + "\r\n" +
+		"To: " + getHeader(msg, "To") + "\r\n" +
+		"Call-ID: " + getHeader(msg, "Call-ID") + "\r\n" +
+		"CSeq: " + getHeader(msg, "CSeq") + "\r\n" +
+		"Content-Length: 0\r\n\r\n"
+
+	_, err := c.Conn.WriteToUDP([]byte(response), addr)
+	if err != nil {
+		fmt.Printf("发送MESSAGE响应失败: %v\n", err)
+	} else {
+		fmt.Printf("200 OK响应已发送至 %s\n", addr.String())
+	}
+}
+
+// customCharsetReader 为给定的编码返回一个CharsetReader
+func customCharsetReader(charset string, input io.Reader) (io.Reader, error) {
+	switch strings.ToLower(charset) {
+	case "gb2312", "gb18030":
+		return transform.NewReader(input, simplifiedchinese.GB18030.NewDecoder()), nil
+	default:
+		return input, nil // 容错处理: 对于不支持的字符集，返回原始输入
+	}
+}
+
+// handleKeepalive 处理Keepalive消息
+func (c *SIPClient) handleKeepalive(body string) {
+	decoder := xml.NewDecoder(strings.NewReader(body))
+	decoder.CharsetReader = customCharsetReader
+
+	var keepalive Keepalive
+	err := decoder.Decode(&keepalive)
+	if err != nil {
+		fmt.Println("解析Keepalive XML失败:", err)
+		return
+	}
+
+	fmt.Printf("收到Keepalive通知: DeviceID=%s, Status=%s\n", keepalive.DeviceID, keepalive.Status)
+	if len(keepalive.Info.DeviceIDs) > 0 {
+		fmt.Println("关联的设备ID:")
+		for _, deviceID := range keepalive.Info.DeviceIDs {
+			fmt.Println("-", deviceID)
+		}
+	}
+
+	// 收到Keepalive后重新发送目录查询
+	go func() {
+		time.Sleep(1 * time.Second)
+		if err := c.SendCatalogQuery(); err != nil {
+			fmt.Println("重新发送目录查询时出错:", err)
+		}
+	}()
+}
+
+// handleDeviceList 处理设备列表响应
+func (c *SIPClient) handleDeviceList(body string) {
+	fmt.Println("收到设备列表响应的原始XML:")
+	fmt.Println(body)
+
+	decoder := xml.NewDecoder(strings.NewReader(body))
+	decoder.CharsetReader = customCharsetReader
+
+	var deviceList DeviceListResponse
+	err := decoder.Decode(&deviceList)
+	if err != nil {
+		fmt.Println("解析设备列表XML失败:", err)
+		return
+	}
+
+	fmt.Printf("收到设备列表 (总数: %d):\n", deviceList.SumNum)
+	for _, device := range deviceList.Devices {
+		fmt.Printf("设备ID: %s, 名称: %s, 制造商: %s, 型号: %s\n",
+			device.DeviceID, device.Name, device.Manufacturer, device.Model)
+	}
+}
+
+// getHeader 从SIP消息中检索指定头部的值
+func getHeader(msg []byte, header string) string {
+	lines := strings.Split(string(msg), "\r\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, header+":") {
+			return strings.TrimSpace(strings.TrimPrefix(line, header+":"))
+		}
+	}
+	return ""
+}
+
+// Run 启动SIP客户端
+func (c *SIPClient) Run() {
+	fmt.Println("SIP服务已在以下地址启动", c.Config.LocalAddr)
+
+	go func() {
+		time.Sleep(2 * time.Second) // 等待一段时间后再发送查询
+		if err := c.SendCatalogQuery(); err != nil {
+			fmt.Println("发送目录查询时出错:", err)
+		}
+	}()
+
+	buffer := make([]byte, 4096)
+	for {
+		n, remoteAddr, err := c.Conn.ReadFromUDP(buffer)
+		if err != nil {
+			fmt.Println("读取UDP消息失败:", err)
+			continue
+		}
+		c.HandleSIPMessage(buffer[:n], remoteAddr)
+	}
+}
+
+func main() {
+	config := Config{
+		NvrID:         "34020000001110000011",
+		SipServerAddr: "100.101.137.130:5060",
+		LocalAddr:     "100.100.155.157:5060",
+	}
+
+	client, err := NewSIPClient(config)
+	if err != nil {
+		fmt.Println("创建SIP客户端失败:", err)
+		return
+	}
+	defer client.Conn.Close()
+
+	client.Run()
+}
+
+// test  message send to device but not receive
+// package main
+
+// import (
+// 	"encoding/xml"
+// 	"fmt"
+// 	"io"
+// 	"net"
+// 	"strings"
+// 	"time"
+
+// 	"golang.org/x/text/encoding/simplifiedchinese"
+// 	"golang.org/x/text/transform"
+// )
+
+// // Device 表示目录中的单个设备
+// type Device struct {
+// 	DeviceID     string `xml:"DeviceID"`
+// 	Name         string `xml:"Name"`
+// 	Manufacturer string `xml:"Manufacturer"`
+// 	Model        string `xml:"Model"`
+// }
+
+// // DeviceListResponse 表示目录响应的XML结构
+// type DeviceListResponse struct {
+// 	XMLName  xml.Name `xml:"Response"`
+// 	CmdType  string   `xml:"CmdType"`
+// 	SN       int      `xml:"SN"`
+// 	DeviceID string   `xml:"DeviceID"`
+// 	SumNum   int      `xml:"SumNum"`
+// 	Devices  []Device `xml:"DeviceList>Item"`
+// }
+
+// // Keepalive 表示保活通知的XML结构
+// type Keepalive struct {
+// 	XMLName  xml.Name `xml:"Notify"`
+// 	CmdType  string   `xml:"CmdType"`
+// 	SN       int      `xml:"SN"`
+// 	DeviceID string   `xml:"DeviceID"`
+// 	Status   string   `xml:"Status"`
+// 	Info     struct {
+// 		DeviceIDs []string `xml:"DeviceID"`
+// 	} `xml:"Info"`
+// }
+
+// // Config 存储SIP客户端配置
+// type Config struct {
+// 	NvrID         string
+// 	SipServerAddr string
+// 	LocalAddr     string
+// }
+
+// // SIPClient 表示我们的SIP客户端
+// type SIPClient struct {
+// 	Config Config
+// 	Conn   *net.UDPConn
+// }
+
+// // NewSIPClient 创建一个新的SIP客户端
+// func NewSIPClient(config Config) (*SIPClient, error) {
+// 	addr, err := net.ResolveUDPAddr("udp", config.LocalAddr)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("解析本地地址失败: %v", err)
+// 	}
+
+// 	conn, err := net.ListenUDP("udp", addr)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("监听UDP端口失败: %v", err)
+// 	}
+
+// 	return &SIPClient{
+// 		Config: config,
+// 		Conn:   conn,
+// 	}, nil
+// }
+
+// // SendCatalogQuery 向NVR发送目录查询
+// func (c *SIPClient) SendCatalogQuery() error {
+// 	message := fmt.Sprintf(`<?xml version="1.0"?>
+// <Query>
+// 	<CmdType>Catalog</CmdType>
+// 	<SN>%d</SN>
+// 	<DeviceID>%s</DeviceID>
+// </Query>`, time.Now().Unix(), c.Config.NvrID)
+
+// 	sipMessage := fmt.Sprintf(
+// 		"MESSAGE sip:%s@%s SIP/2.0\r\n"+
+// 			"Via: SIP/2.0/UDP %s;branch=z9hG4bK%d\r\n"+
+// 			"From: <sip:client@%s>;tag=%d\r\n"+
+// 			"To: <sip:%s@%s>\r\n"+
+// 			"Call-ID: %d\r\n"+
+// 			"CSeq: 1 MESSAGE\r\n"+
+// 			"Content-Type: Application/MANSCDP+xml\r\n"+
+// 			"Max-Forwards: 70\r\n"+
+// 			"User-Agent: GBDeviceClient\r\n"+
+// 			"Content-Length: %d\r\n"+
+// 			"\r\n"+
+// 			"%s",
+// 		c.Config.NvrID, c.Config.SipServerAddr,
+// 		c.Config.LocalAddr, time.Now().UnixNano(),
+// 		c.Config.LocalAddr, time.Now().UnixNano(),
+// 		c.Config.NvrID, c.Config.SipServerAddr,
+// 		time.Now().UnixNano(),
+// 		len(message),
+// 		message)
+
+// 	serverAddr, err := net.ResolveUDPAddr("udp", c.Config.SipServerAddr)
+// 	if err != nil {
+// 		return fmt.Errorf("解析服务器地址失败: %v", err)
+// 	}
+
+// 	_, err = c.Conn.WriteToUDP([]byte(sipMessage), serverAddr)
+// 	if err != nil {
+// 		return fmt.Errorf("发送SIP消息失败: %v", err)
+// 	}
+
+// 	fmt.Println("目录查询已发送至NVR")
+// 	return nil
+// }
+
+// // HandleSIPMessage 处理传入的SIP消息
+// func (c *SIPClient) HandleSIPMessage(msg []byte, addr *net.UDPAddr) {
+// 	if len(msg) == 0 {
+// 		fmt.Println("收到空SIP消息")
+// 		return
+// 	}
+
+// 	lines := strings.Split(string(msg), "\r\n")
+// 	if len(lines) > 0 {
+// 		if strings.HasPrefix(lines[0], "SIP/2.0") {
+// 			fmt.Println("收到SIP响应:", lines[0])
+// 		} else {
+// 			parts := strings.Split(lines[0], " ")
+// 			if len(parts) > 0 {
+// 				method := parts[0]
+// 				fmt.Printf("收到SIP请求，方法: %s，来自: %s\n", method, addr.String())
+
+// 				if method == "REGISTER" {
+// 					c.handleRegister(msg, addr)
+// 				} else if method == "MESSAGE" {
+// 					c.handleMessage(msg, addr)
+// 				}
+// 			}
+// 		}
+// 	}
+// }
+
+// // handleRegister 处理REGISTER请求
+// func (c *SIPClient) handleRegister(msg []byte, addr *net.UDPAddr) {
+// 	response := "SIP/2.0 200 OK\r\n" +
+// 		"Via: " + getHeader(msg, "Via") + "\r\n" +
+// 		"From: " + getHeader(msg, "From") + "\r\n" +
+// 		"To: " + getHeader(msg, "To") + "\r\n" +
+// 		"Call-ID: " + getHeader(msg, "Call-ID") + "\r\n" +
+// 		"CSeq: " + getHeader(msg, "CSeq") + "\r\n" +
+// 		"Contact: " + getHeader(msg, "Contact") + "\r\n" +
+// 		"Content-Length: 0\r\n\r\n"
+
+// 	_, err := c.Conn.WriteToUDP([]byte(response), addr)
+// 	if err != nil {
+// 		fmt.Printf("发送REGISTER响应失败: %v\n", err)
+// 	} else {
+// 		fmt.Printf("200 OK响应已发送至 %s\n", addr.String())
+// 	}
+// }
+
+// // handleMessage 处理MESSAGE请求
+// func (c *SIPClient) handleMessage(msg []byte, addr *net.UDPAddr) {
+// 	bodyStart := strings.Index(string(msg), "\r\n\r\n")
+// 	if bodyStart != -1 {
+// 		body := string(msg[bodyStart+4:])
+// 		fmt.Println("收到MESSAGE正文:")
+// 		fmt.Println(body)
+
+// 		if strings.Contains(body, "<Notify>") && strings.Contains(body, "<CmdType>Keepalive</CmdType>") {
+// 			c.handleKeepalive(body)
+// 		} else if strings.Contains(body, "<Response>") && strings.Contains(body, "<DeviceList>") {
+// 			c.handleDeviceList(body)
+// 		} else {
+// 			fmt.Println("收到未知消息类型")
+// 		}
+// 	} else {
+// 		fmt.Println("在MESSAGE请求中未找到消息正文")
+// 	}
+
+// 	// 发送200 OK响应
+// 	response := "SIP/2.0 200 OK\r\n" +
+// 		"Via: " + getHeader(msg, "Via") + "\r\n" +
+// 		"From: " + getHeader(msg, "From") + "\r\n" +
+// 		"To: " + getHeader(msg, "To") + "\r\n" +
+// 		"Call-ID: " + getHeader(msg, "Call-ID") + "\r\n" +
+// 		"CSeq: " + getHeader(msg, "CSeq") + "\r\n" +
+// 		"Content-Length: 0\r\n\r\n"
+
+// 	_, err := c.Conn.WriteToUDP([]byte(response), addr)
+// 	if err != nil {
+// 		fmt.Printf("发送MESSAGE响应失败: %v\n", err)
+// 	} else {
+// 		fmt.Printf("200 OK响应已发送至 %s\n", addr.String())
+// 	}
+// }
+
+// // customCharsetReader 为给定的编码返回一个CharsetReader
+// func customCharsetReader(charset string, input io.Reader) (io.Reader, error) {
+// 	switch strings.ToLower(charset) {
+// 	case "gb2312", "gb18030":
+// 		return transform.NewReader(input, simplifiedchinese.GB18030.NewDecoder()), nil
+// 	default:
+// 		return nil, fmt.Errorf("不支持的字符集: %s", charset)
+// 	}
+// }
+
+// // handleKeepalive 处理Keepalive消息
+// func (c *SIPClient) handleKeepalive(body string) {
+// 	decoder := xml.NewDecoder(strings.NewReader(body))
+// 	decoder.CharsetReader = customCharsetReader
+
+// 	var keepalive Keepalive
+// 	err := decoder.Decode(&keepalive)
+// 	if err != nil {
+// 		fmt.Println("解析Keepalive XML失败:", err)
+// 		return
+// 	}
+
+// 	fmt.Printf("收到Keepalive通知: DeviceID=%s, Status=%s\n", keepalive.DeviceID, keepalive.Status)
+// 	if len(keepalive.Info.DeviceIDs) > 0 {
+// 		fmt.Println("关联的设备ID:")
+// 		for _, deviceID := range keepalive.Info.DeviceIDs {
+// 			fmt.Println("-", deviceID)
+// 		}
+// 	}
+
+// 	// 收到Keepalive后重新发送目录查询
+// 	go func() {
+// 		time.Sleep(1 * time.Second)
+// 		if err := c.SendCatalogQuery(); err != nil {
+// 			fmt.Println("重新发送目录查询时出错:", err)
+// 		}
+// 	}()
+// }
+
+// // handleDeviceList 处理设备列表响应
+// func (c *SIPClient) handleDeviceList(body string) {
+// 	fmt.Println("收到设备列表响应的原始XML:")
+// 	fmt.Println(body)
+
+// 	decoder := xml.NewDecoder(strings.NewReader(body))
+// 	decoder.CharsetReader = customCharsetReader
+
+// 	var deviceList DeviceListResponse
+// 	err := decoder.Decode(&deviceList)
+// 	if err != nil {
+// 		fmt.Println("解析设备列表XML失败:", err)
+// 		return
+// 	}
+
+// 	fmt.Printf("收到设备列表 (总数: %d):\n", deviceList.SumNum)
+// 	for _, device := range deviceList.Devices {
+// 		fmt.Printf("设备ID: %s, 名称: %s, 制造商: %s, 型号: %s\n",
+// 			device.DeviceID, device.Name, device.Manufacturer, device.Model)
+// 	}
+// }
+
+// // getHeader 从SIP消息中检索指定头部的值
+// func getHeader(msg []byte, header string) string {
+// 	lines := strings.Split(string(msg), "\r\n")
+// 	for _, line := range lines {
+// 		if strings.HasPrefix(line, header+":") {
+// 			return strings.TrimSpace(strings.TrimPrefix(line, header+":"))
+// 		}
+// 	}
+// 	return ""
+// }
+
+// // Run 启动SIP客户端
+// func (c *SIPClient) Run() {
+// 	fmt.Println("SIP服务已在以下地址启动", c.Config.LocalAddr)
+
+// 	go func() {
+// 		time.Sleep(2 * time.Second) // 等待一段时间后再发送查询
+// 		if err := c.SendCatalogQuery(); err != nil {
+// 			fmt.Println("发送目录查询时出错:", err)
+// 		}
+// 	}()
+
+// 	buffer := make([]byte, 4096)
+// 	for {
+// 		n, remoteAddr, err := c.Conn.ReadFromUDP(buffer)
+// 		if err != nil {
+// 			fmt.Println("读取UDP消息失败:", err)
+// 			continue
+// 		}
+// 		c.HandleSIPMessage(buffer[:n], remoteAddr)
+// 	}
+// }
+
+// func main() {
+// 	config := Config{
+// 		NvrID:         "34020000001110000011",
+// 		SipServerAddr: "100.101.137.130:5060",
+// 		LocalAddr:     "100.100.155.157:5060",
+// 	}
+
+// 	client, err := NewSIPClient(config)
+// 	if err != nil {
+// 		fmt.Println("创建SIP客户端失败:", err)
+// 		return
+// 	}
+// 	defer client.Conn.Close()
+
+// 	client.Run()
+// }
+
+/**
+
+SIP服务已在以下地址启动 100.100.155.157:5060
+收到SIP请求，方法: REGISTER，来自: 100.100.137.130:5060
+200 OK响应已发送至 100.100.137.130:5060
+收到SIP请求，方法: MESSAGE，来自: 100.100.137.130:5060
+收到MESSAGE正文:
+<?xml version="1.0" encoding="gb2312"?>
+<Notify>
+<CmdType>Keepalive</CmdType>
+<SN>2371</SN>
+<DeviceID>34020000001110000011</DeviceID>
+<Status>OK</Status>
+<Info>
+<DeviceID>34020000001320000021</DeviceID>
+<DeviceID>34020000001320000007</DeviceID>
+</Info>
+</Notify>
+
+收到Keepalive通知: DeviceID=34020000001110000011, Status=OK
+关联的设备ID:
+- 34020000001320000021
+- 34020000001320000007
+200 OK响应已发送至 100.100.137.130:5060
+目录查询已发送至NVR
+目录查询已发送至NVR
+
+
+
+
+收到SIP请求，方法: MESSAGE，来自: 100.100.137.130:5060
+收到MESSAGE正文:
+<?xml version="1.0" encoding="gb2312"?>
+<Notify>
+<CmdType>Keepalive</CmdType>
+<SN>2372</SN>
+<DeviceID>34020000001110000011</DeviceID>
+<Status>OK</Status>
+<Info>
+<DeviceID>34020000001320000021</DeviceID>
+<DeviceID>34020000001320000007</DeviceID>
+</Info>
+</Notify>
+
+收到Keepalive通知: DeviceID=34020000001110000011, Status=OK
+关联的设备ID:
+- 34020000001320000021
+- 34020000001320000007
+200 OK响应已发送至 100.100.137.130:5060
+目录查询已发送至NVR
+收到SIP请求，方法: MESSAGE，来自: 100.100.137.130:5060
+收到MESSAGE正文:
+<?xml version="1.0" encoding="gb2312"?>
+<Notify>
+<CmdType>Keepalive</CmdType>
+<SN>2373</SN>
+<DeviceID>34020000001110000011</DeviceID>
+<Status>OK</Status>
+<Info>
+<DeviceID>34020000001320000021</DeviceID>
+<DeviceID>34020000001320000007</DeviceID>
+</Info>
+</Notify>
+
+收到Keepalive通知: DeviceID=34020000001110000011, Status=OK
+关联的设备ID:
+- 34020000001320000021
+- 34020000001320000007
+200 OK响应已发送至 100.100.137.130:5060
+目录查询已发送至NVR
+收到SIP请求，方法: MESSAGE，来自: 100.100.137.130:5060
+收到MESSAGE正文:
+<?xml version="1.0" encoding="gb2312"?>
+<Notify>
+<CmdType>Keepalive</CmdType>
+<SN>2374</SN>
+<DeviceID>34020000001110000011</DeviceID>
+<Status>OK</Status>
+<Info>
+<DeviceID>34020000001320000021</DeviceID>
+<DeviceID>34020000001320000007</DeviceID>
+</Info>
+</Notify>
+
+收到Keepalive通知: DeviceID=34020000001110000011, Status=OK
+关联的设备ID:
+- 34020000001320000021
+- 34020000001320000007
+200 OK响应已发送至 100.100.137.130:5060
+目录查询已发送至NVR
+收到SIP请求，方法: MESSAGE，来自: 100.100.137.130:5060
+收到MESSAGE正文:
+<?xml version="1.0" encoding="gb2312"?>
+<Notify>
+<CmdType>Keepalive</CmdType>
+<SN>2375</SN>
+<DeviceID>34020000001110000011</DeviceID>
+<Status>OK</Status>
+<Info>
+<DeviceID>34020000001320000021</DeviceID>
+<DeviceID>34020000001320000007</DeviceID>
+</Info>
+</Notify>
+
+收到Keepalive通知: DeviceID=34020000001110000011, Status=OK
+关联的设备ID:
+- 34020000001320000021
+- 34020000001320000007
+200 OK响应已发送至 100.100.137.130:5060
+目录查询已发送至NVR
+收到SIP请求，方法: MESSAGE，来自: 100.100.137.130:5060
+收到MESSAGE正文:
+<?xml version="1.0" encoding="gb2312"?>
+<Notify>
+<CmdType>Keepalive</CmdType>
+<SN>2376</SN>
+<DeviceID>34020000001110000011</DeviceID>
+<Status>OK</Status>
+<Info>
+<DeviceID>34020000001320000021</DeviceID>
+<DeviceID>34020000001320000007</DeviceID>
+</Info>
+</Notify>
+
+收到Keepalive通知: DeviceID=34020000001110000011, Status=OK
+关联的设备ID:
+- 34020000001320000021
+- 34020000001320000007
+200 OK响应已发送至 100.100.137.130:5060
+目录查询已发送至NVR
+
+*/
+
+// package main
+
+// import (
+// 	"encoding/xml"
+// 	"fmt"
+// 	"io"
+// 	"net"
+// 	"strings"
+// 	"time"
+
+// 	"golang.org/x/text/encoding/simplifiedchinese"
+// 	"golang.org/x/text/transform"
+// )
+
+// // Device represents a single device in the catalog
+// type Device struct {
+// 	DeviceID     string `xml:"DeviceID"`
+// 	Name         string `xml:"Name"`
+// 	Manufacturer string `xml:"Manufacturer"`
+// 	Model        string `xml:"Model"`
+// }
+
+// // DeviceListResponse represents the XML structure of the catalog response
+// type DeviceListResponse struct {
+// 	XMLName  xml.Name `xml:"Response"`
+// 	CmdType  string   `xml:"CmdType"`
+// 	SN       int      `xml:"SN"`
+// 	DeviceID string   `xml:"DeviceID"`
+// 	SumNum   int      `xml:"SumNum"`
+// 	Devices  []Device `xml:"DeviceList>Item"`
+// }
+
+// // Keepalive represents the XML structure of the keepalive notification
+// type Keepalive struct {
+// 	XMLName  xml.Name `xml:"Notify"`
+// 	CmdType  string   `xml:"CmdType"`
+// 	SN       int      `xml:"SN"`
+// 	DeviceID string   `xml:"DeviceID"`
+// 	Status   string   `xml:"Status"`
+// 	Info     struct {
+// 		DeviceIDs []string `xml:"DeviceID"`
+// 	} `xml:"Info"`
+// }
+
+// // Config stores the SIP client configuration
+// type Config struct {
+// 	NvrID         string
+// 	SipServerAddr string
+// 	LocalAddr     string
+// }
+
+// // SIPClient represents our SIP client
+// type SIPClient struct {
+// 	Config Config
+// 	Conn   *net.UDPConn
+// }
+
+// // NewSIPClient creates a new SIP client
+// func NewSIPClient(config Config) (*SIPClient, error) {
+// 	addr, err := net.ResolveUDPAddr("udp", config.LocalAddr)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to resolve local address: %v", err)
+// 	}
+
+// 	conn, err := net.ListenUDP("udp", addr)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to listen on UDP port: %v", err)
+// 	}
+
+// 	return &SIPClient{
+// 		Config: config,
+// 		Conn:   conn,
+// 	}, nil
+// }
+
+// // SendCatalogQuery sends a catalog query to the NVR
+// func (c *SIPClient) SendCatalogQuery() error {
+// 	message := fmt.Sprintf(`<?xml version="1.0"?>
+// <Query>
+// 	<CmdType>Catalog</CmdType>
+// 	<SN>%d</SN>
+// 	<DeviceID>%s</DeviceID>
+// </Query>`, time.Now().Unix(), c.Config.NvrID)
+
+// 	sipMessage := fmt.Sprintf(
+// 		"MESSAGE sip:%s@%s SIP/2.0\r\n"+
+// 			"Via: SIP/2.0/UDP %s;branch=z9hG4bK%d\r\n"+
+// 			"From: <sip:client@%s>;tag=%d\r\n"+
+// 			"To: <sip:%s@%s>\r\n"+
+// 			"Call-ID: %d\r\n"+
+// 			"CSeq: 1 MESSAGE\r\n"+
+// 			"Content-Type: Application/MANSCDP+xml\r\n"+
+// 			"Max-Forwards: 70\r\n"+
+// 			"User-Agent: GBDeviceClient\r\n"+
+// 			"Content-Length: %d\r\n"+
+// 			"\r\n"+
+// 			"%s",
+// 		c.Config.NvrID, c.Config.SipServerAddr,
+// 		c.Config.LocalAddr, time.Now().UnixNano(),
+// 		c.Config.LocalAddr, time.Now().UnixNano(),
+// 		c.Config.NvrID, c.Config.SipServerAddr,
+// 		time.Now().UnixNano(),
+// 		len(message),
+// 		message)
+
+// 	serverAddr, err := net.ResolveUDPAddr("udp", c.Config.SipServerAddr)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to resolve server address: %v", err)
+// 	}
+
+// 	_, err = c.Conn.WriteToUDP([]byte(sipMessage), serverAddr)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to send SIP message: %v", err)
+// 	}
+
+// 	fmt.Println("Catalog query sent to NVR")
+// 	return nil
+// }
+
+// // HandleSIPMessage handles incoming SIP messages
+// func (c *SIPClient) HandleSIPMessage(msg []byte, addr *net.UDPAddr) {
+// 	if len(msg) == 0 {
+// 		fmt.Println("Received empty SIP message")
+// 		return
+// 	}
+
+// 	lines := strings.Split(string(msg), "\r\n")
+// 	if len(lines) > 0 {
+// 		if strings.HasPrefix(lines[0], "SIP/2.0") {
+// 			fmt.Println("Received SIP response:", lines[0])
+// 		} else {
+// 			parts := strings.Split(lines[0], " ")
+// 			if len(parts) > 0 {
+// 				method := parts[0]
+// 				fmt.Printf("Received SIP request, method: %s, from: %s\n", method, addr.String())
+
+// 				if method == "REGISTER" {
+// 					c.handleRegister(msg, addr)
+// 				} else if method == "MESSAGE" {
+// 					c.handleMessage(msg, addr)
+// 				}
+// 			}
+// 		}
+// 	}
+// }
+
+// // handleRegister processes REGISTER requests
+// func (c *SIPClient) handleRegister(msg []byte, addr *net.UDPAddr) {
+// 	response := "SIP/2.0 200 OK\r\n" +
+// 		"Via: " + getHeader(msg, "Via") + "\r\n" +
+// 		"From: " + getHeader(msg, "From") + "\r\n" +
+// 		"To: " + getHeader(msg, "To") + "\r\n" +
+// 		"Call-ID: " + getHeader(msg, "Call-ID") + "\r\n" +
+// 		"CSeq: " + getHeader(msg, "CSeq") + "\r\n" +
+// 		"Contact: " + getHeader(msg, "Contact") + "\r\n" +
+// 		"Content-Length: 0\r\n\r\n"
+
+// 	_, err := c.Conn.WriteToUDP([]byte(response), addr)
+// 	if err != nil {
+// 		fmt.Printf("Failed to send REGISTER response: %v\n", err)
+// 	} else {
+// 		fmt.Printf("200 OK response sent to %s\n", addr.String())
+// 	}
+// }
+
+// // handleMessage processes MESSAGE requests
+// func (c *SIPClient) handleMessage(msg []byte, addr *net.UDPAddr) {
+// 	bodyStart := strings.Index(string(msg), "\r\n\r\n")
+// 	if bodyStart != -1 {
+// 		body := string(msg[bodyStart+4:])
+// 		fmt.Println("Received MESSAGE body:")
+// 		fmt.Println(body)
+
+// 		if strings.Contains(body, "<Notify>") && strings.Contains(body, "<CmdType>Keepalive</CmdType>") {
+// 			c.handleKeepalive(body)
+// 		} else if strings.Contains(body, "<Response>") && strings.Contains(body, "<DeviceList>") {
+// 			c.handleDeviceList(body)
+// 		} else {
+// 			fmt.Println("Received unknown message type")
+// 		}
+// 	} else {
+// 		fmt.Println("No message body found in MESSAGE request")
+// 	}
+
+// 	// Send 200 OK response
+// 	response := "SIP/2.0 200 OK\r\n" +
+// 		"Via: " + getHeader(msg, "Via") + "\r\n" +
+// 		"From: " + getHeader(msg, "From") + "\r\n" +
+// 		"To: " + getHeader(msg, "To") + "\r\n" +
+// 		"Call-ID: " + getHeader(msg, "Call-ID") + "\r\n" +
+// 		"CSeq: " + getHeader(msg, "CSeq") + "\r\n" +
+// 		"Content-Length: 0\r\n\r\n"
+
+// 	_, err := c.Conn.WriteToUDP([]byte(response), addr)
+// 	if err != nil {
+// 		fmt.Printf("Failed to send MESSAGE response: %v\n", err)
+// 	} else {
+// 		fmt.Printf("200 OK response sent to %s\n", addr.String())
+// 	}
+// }
+
+// // customCharsetReader returns a CharsetReader for the given encoding
+// func customCharsetReader(charset string, input io.Reader) (io.Reader, error) {
+// 	switch strings.ToLower(charset) {
+// 	case "gb2312", "gb18030":
+// 		return transform.NewReader(input, simplifiedchinese.GB18030.NewDecoder()), nil
+// 	default:
+// 		return nil, fmt.Errorf("unsupported charset: %s", charset)
+// 	}
+// }
+
+// // handleKeepalive processes the Keepalive message
+// func (c *SIPClient) handleKeepalive(body string) {
+// 	decoder := xml.NewDecoder(strings.NewReader(body))
+// 	decoder.CharsetReader = customCharsetReader
+
+// 	var keepalive Keepalive
+// 	err := decoder.Decode(&keepalive)
+// 	if err != nil {
+// 		fmt.Println("Failed to parse Keepalive XML:", err)
+// 		return
+// 	}
+
+// 	fmt.Printf("Received Keepalive notification: DeviceID=%s, Status=%s\n", keepalive.DeviceID, keepalive.Status)
+// 	if len(keepalive.Info.DeviceIDs) > 0 {
+// 		fmt.Println("Associated Device IDs:")
+// 		for _, deviceID := range keepalive.Info.DeviceIDs {
+// 			fmt.Println("-", deviceID)
+// 		}
+// 	}
+
+// 	// Re-send catalog query after receiving Keepalive
+// 	go func() {
+// 		time.Sleep(1 * time.Second)
+// 		if err := c.SendCatalogQuery(); err != nil {
+// 			fmt.Println("Error re-sending catalog query:", err)
+// 		}
+// 	}()
+// }
+
+// // handleDeviceList processes the device list response
+// func (c *SIPClient) handleDeviceList(body string) {
+// 	decoder := xml.NewDecoder(strings.NewReader(body))
+// 	decoder.CharsetReader = customCharsetReader
+
+// 	var deviceList DeviceListResponse
+// 	err := decoder.Decode(&deviceList)
+// 	if err != nil {
+// 		fmt.Println("Failed to parse device list XML:", err)
+// 		return
+// 	}
+
+// 	fmt.Printf("Received device list (Total: %d):\n", deviceList.SumNum)
+// 	for _, device := range deviceList.Devices {
+// 		fmt.Printf("Device ID: %s, Name: %s, Manufacturer: %s, Model: %s\n",
+// 			device.DeviceID, device.Name, device.Manufacturer, device.Model)
+// 	}
+// }
+
+// // getHeader retrieves the value of a specified header from the SIP message
+// func getHeader(msg []byte, header string) string {
+// 	lines := strings.Split(string(msg), "\r\n")
+// 	for _, line := range lines {
+// 		if strings.HasPrefix(line, header+":") {
+// 			return strings.TrimSpace(strings.TrimPrefix(line, header+":"))
+// 		}
+// 	}
+// 	return ""
+// }
+
+// // Run starts the SIP client
+// func (c *SIPClient) Run() {
+// 	fmt.Println("SIP service started on", c.Config.LocalAddr)
+
+// 	go func() {
+// 		time.Sleep(2 * time.Second) // Wait a bit before sending the query
+// 		if err := c.SendCatalogQuery(); err != nil {
+// 			fmt.Println("Error sending catalog query:", err)
+// 		}
+// 	}()
+
+// 	buffer := make([]byte, 4096)
+// 	for {
+// 		n, remoteAddr, err := c.Conn.ReadFromUDP(buffer)
+// 		if err != nil {
+// 			fmt.Println("Failed to read UDP message:", err)
+// 			continue
+// 		}
+// 		c.HandleSIPMessage(buffer[:n], remoteAddr)
+// 	}
+// }
+
+// func main() {
+// 	config := Config{
+// 		NvrID:         "34020000001110000011",
+// 		SipServerAddr: "100.101.137.130:5060",
+// 		LocalAddr:     "100.100.155.157:5060",
+// 	}
+
+// 	client, err := NewSIPClient(config)
+// 	if err != nil {
+// 		fmt.Println("Failed to create SIP client:", err)
+// 		return
+// 	}
+// 	defer client.Conn.Close()
+
+// 	client.Run()
+// }

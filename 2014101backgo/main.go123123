@@ -1,0 +1,131 @@
+package main
+
+import (
+	"fmt"
+	"net"
+	"strings"
+	"time"
+)
+
+// SIPConfig holds the configuration for the SIP client
+type SIPConfig struct {
+	ServerIP   string
+	ServerPort string
+	DeviceID   string
+	SIPDomain  string
+	Password   string
+}
+
+// createSIPRegisterMessage generates a SIP REGISTER message
+func createSIPRegisterMessage(config SIPConfig, localIP string) string {
+	return fmt.Sprintf(
+		"REGISTER sip:%s SIP/2.0\r\n"+
+			"Via: SIP/2.0/UDP %s;branch=z9hG4bK%s\r\n"+
+			"Max-Forwards: 70\r\n"+
+			"To: <sip:%s@%s>\r\n"+
+			"From: <sip:%s@%s>;tag=%s\r\n"+
+			"Call-ID: %s\r\n"+
+			"CSeq: 1 REGISTER\r\n"+
+			"Contact: <sip:%s@%s>\r\n"+
+			"Expires: 3600\r\n"+
+			"User-Agent: GBDeviceClient\r\n"+
+			"Content-Length: 0\r\n\r\n",
+		config.SIPDomain, localIP, generateBranch(),
+		config.DeviceID, config.SIPDomain,
+		config.DeviceID, config.SIPDomain, generateTag(),
+		generateCallID(localIP),
+		config.DeviceID, localIP)
+}
+
+// generateBranch creates a unique branch parameter for the Via header
+func generateBranch() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// generateTag creates a unique tag for the From header
+func generateTag() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// generateCallID creates a unique Call-ID
+func generateCallID(localIP string) string {
+	return fmt.Sprintf("%d@%s", time.Now().UnixNano(), localIP)
+}
+
+// sendAndReceive sends a message and waits for a response
+func sendAndReceive(conn net.Conn, message string) (string, error) {
+	_, err := conn.Write([]byte(message))
+	if err != nil {
+		return "", fmt.Errorf("发送失败: %v", err)
+	}
+
+	buffer := make([]byte, 2048)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := conn.Read(buffer)
+	if err != nil {
+		return "", fmt.Errorf("读取响应失败: %v", err)
+	}
+
+	return string(buffer[:n]), nil
+}
+
+func main() {
+	config := SIPConfig{
+		ServerIP:   "100.100.137.130", // SIP服务器的IP地址
+		ServerPort: "5060",
+		DeviceID:   "34020000002000000001",
+		SIPDomain:  "3402000000",
+		Password:   "smai1234", // Add password if required
+	}
+
+	conn, err := net.Dial("udp", net.JoinHostPort(config.ServerIP, config.ServerPort))
+	if err != nil {
+		fmt.Println("无法连接到SIP服务器:", err)
+		return
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	localIP := localAddr.IP.String()
+
+	registerMessage := createSIPRegisterMessage(config, localIP)
+	fmt.Println("发送SIP REGISTER消息:")
+	fmt.Println(registerMessage)
+
+	response, err := sendAndReceive(conn, registerMessage)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Printf("收到的响应:\n%s\n", response)
+
+	// 检查是否需要认证
+	if strings.Contains(response, "401 Unauthorized") {
+		fmt.Println("需要认证，正在准备认证信息...")
+		// 这里需要实现认证逻辑
+		// 解析WWW-Authenticate头，生成新的REGISTER消息包含认证信息
+		// 重新发送认证后的REGISTER消息
+	}
+
+	// 实现保活机制
+	go keepAlive(conn, config, localIP)
+
+	// 主程序继续运行，等待用户输入或其他操作
+	fmt.Println("SIP客户端正在运行。按Ctrl+C退出。")
+	select {}
+}
+
+func keepAlive(conn net.Conn, config SIPConfig, localIP string) {
+	ticker := time.NewTicker(55 * time.Second) // 每55秒发送一次保活消息
+	defer ticker.Stop()
+
+	for range ticker.C {
+		registerMessage := createSIPRegisterMessage(config, localIP)
+		_, err := sendAndReceive(conn, registerMessage)
+		if err != nil {
+			fmt.Println("保活失败:", err)
+			// 可以在这里实现重连逻辑
+		}
+	}
+}
