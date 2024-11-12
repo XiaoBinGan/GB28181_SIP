@@ -116,7 +116,6 @@
 // 	}
 // }
 
-
 // // NewDeviceManager 创建设备管理器
 // func NewDeviceManager() *DeviceManager {
 // 	dm := &DeviceManager{
@@ -233,10 +232,10 @@
 
 // 	// 更新设备列表
 // 	dm.deviceList = append(dm.deviceList, newDevices...)
-	
+
 // 	// 清除现有的叶子节点映射
 // 	dm.leafDevices = make(map[string]*Device)
-	
+
 // 	// 更新设备映射和识别叶子节点
 // 	childrenCount := make(map[string]int)
 // 	for _, device := range newDevices {
@@ -289,7 +288,7 @@
 // 	// 等待结果或超时
 // 	timeoutChan := time.After(timeout)
 // 	done := make(chan struct{})
-	
+
 // 	go func() {
 // 		for dm.deviceSumNum == 0 || len(dm.deviceList) < dm.deviceSumNum {
 // 			dm.getCatalogCond.Wait()
@@ -420,7 +419,6 @@
 // 		fmt.Printf("服务器运行错误: %v\n", err)
 // 	}
 
-	
 // }
 // // func main() {
 // // 	// 使用配置中的本地SIP端口

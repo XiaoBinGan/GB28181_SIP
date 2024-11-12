@@ -1,0 +1,9 @@
+
+# config.yaml
+device_id: "34020000001110000011"
+local_ip: "100.100.155.157"
+local_port: "5060" # 本地NVR模拟的端口
+server_ip: "100.100.150.220" # 服务器的IP地址
+server_port: "5060" # 服务器的端口
+keepalive_interval: 30 # 保活消息的发送间隔（秒）
+password: "your_password_here"  # 添加这行
