@@ -365,17 +365,17 @@ func HandleCatalog(config *Config, request string) error {
 
 	// 定义完整的设备列表
 	devices := []CatalogItem{
-		{DeviceID: "34020000001320000021", Name: "阶梯会议厅", Status: "OFF", Address: "100.100.138.10"},
-		{DeviceID: "34020000001320000002", Name: "洗手间", Status: "ON", Address: "100.100.138.13"},
-		{DeviceID: "34020000001320000003", Name: "Camera 01", Status: "ON", Address: "100.100.138.18"},
-		{DeviceID: "34020000001320000004", Name: "走廊1", Status: "OFF", Address: "100.100.138.12"},
-		{DeviceID: "34020000001320000005", Name: "前台", Status: "OFF", Address: "100.100.138.14"},
-		{DeviceID: "34020000001320000006", Name: "机房", Status: "OFF", Address: "100.100.138.15"},
-		{DeviceID: "34020000001320000007", Name: "办公区1", Status: "OFF", Address: "100.100.138.11"},
-		{DeviceID: "34020000001320000008", Name: "办公区2", Status: "OFF", Address: "100.100.138.16"},
-		{DeviceID: "34020000001320000009", Name: "展厅1", Status: "OFF", Address: "100.100.138.19"},
-		{DeviceID: "34020000001320000010", Name: "展厅2", Status: "OFF", Address: "100.100.138.20"},
-		{DeviceID: "34020000001320000013", Name: "办公区3", Status: "OFF", Address: "100.100.138.21"},
+		{DeviceID: "34020000001320000021", Name: "1", Status: "OFF", Address: "100.101.138.10"},
+		{DeviceID: "34020000001320000002", Name: "2", Status: "ON", Address: "100.101.138.13"},
+		{DeviceID: "34020000001320000003", Name: "Camera 01", Status: "ON", Address: "100.101.138.18"},
+		{DeviceID: "34020000001320000004", Name: "3", Status: "OFF", Address: "100.101.138.12"},
+		{DeviceID: "34020000001320000005", Name: "4", Status: "OFF", Address: "100.101.138.14"},
+		{DeviceID: "34020000001320000006", Name: "5", Status: "OFF", Address: "100.101.138.15"},
+		{DeviceID: "34020000001320000007", Name: "6", Status: "OFF", Address: "100.101.138.11"},
+		{DeviceID: "34020000001320000008", Name: "7", Status: "OFF", Address: "100.101.138.16"},
+		{DeviceID: "34020000001320000009", Name: "8", Status: "OFF", Address: "100.101.138.19"},
+		{DeviceID: "34020000001320000010", Name: "9", Status: "OFF", Address: "100.101.138.20"},
+		{DeviceID: "34020000001320000013", Name: "10", Status: "OFF", Address: "100.101.138.21"},
 	}
 
 	// 构建XML响应
