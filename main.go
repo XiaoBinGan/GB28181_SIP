@@ -18,7 +18,7 @@ func main() {
 	/**
 	 * 3.对接上级平台级请求
 	 */
-	// buffer := make([]byte, 4096)
+	// buffer := make([]byte, 4096)å
 	// conn := gb28181.Conn
 	// for {
 	// 	n, remoteAddr, err := conn.ReadFromUDP(buffer)
