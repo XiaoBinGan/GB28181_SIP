@@ -306,6 +306,146 @@ func SimulateNVR(configPath string) {
 }
 
 // HandleCatalog 处理接收到的Catalog消息并返回响应
+// func HandleCatalog(config *Config, request string) error {
+// 	fmt.Println("收到Catalog请求")
+// 	if Conn == nil {
+// 		return fmt.Errorf("全局连接未初始化")
+// 	}
+
+// 	// 解析请求信息
+// 	callIDRe := regexp.MustCompile(`Call-ID: (.+?)\r\n`)
+// 	fromTagRe := regexp.MustCompile(`From:.*?tag=(.+?)\r\n`)
+// 	cseqRe := regexp.MustCompile(`CSeq: (\d+)`)
+// 	viaRe := regexp.MustCompile(`Via: (.+?)\r\n`)
+
+// 	callIDMatches := callIDRe.FindStringSubmatch(request)
+// 	fromTagMatches := fromTagRe.FindStringSubmatch(request)
+// 	cseqMatches := cseqRe.FindStringSubmatch(request)
+// 	viaMatches := viaRe.FindStringSubmatch(request)
+
+// 	if len(callIDMatches) < 2 || len(fromTagMatches) < 2 || len(cseqMatches) < 2 || len(viaMatches) < 2 {
+// 		return fmt.Errorf("无法解析SIP消息头")
+// 	}
+
+// 	callID := callIDMatches[1]
+// 	fromTag := fromTagMatches[1]
+// 	cseq := cseqMatches[1]
+// 	via := viaMatches[1]
+// 	fmt.Printf("via: %s\n", via)
+
+// 	// 生成更可靠的分支和标签
+// 	branch := fmt.Sprintf("z9hG4bK%d", time.Now().UnixNano())
+// 	toTag := fmt.Sprintf("to-%d", time.Now().UnixNano())
+
+// 	// 第一步：立即返回200 OK响应
+// 	firstResponse := fmt.Sprintf(
+// 		"SIP/2.0 200 OK\r\n"+
+// 			"Via: %s\r\n"+
+// 			"From: <sip:%s@%s:5060>;tag=%s\r\n"+
+// 			"To: <sip:%s@%s:%s>;tag=%s\r\n"+
+// 			"Call-ID: %s\r\n"+
+// 			"CSeq: %s MESSAGE\r\n"+
+// 			"User-agent: Embedded Net smaiDVR/NVR/DVS\r\n"+
+// 			"Content-Length: 0\r\n\r\n",
+// 		// config.ServerIP, config.ServerPort, config.ServerPort, branch,
+// 		via,
+// 		config.ServerID, config.ServerIP, fromTag,
+// 		config.DeviceID, config.LocalIP, config.LocalPort, toTag,
+// 		callID,
+// 		cseq,
+// 	)
+
+// 	// 发送200 OK响应
+// 	_, err := Conn.Write([]byte(firstResponse))
+// 	if err != nil {
+// 		return fmt.Errorf("发送200 OK响应失败: %v", err)
+// 	}
+
+// 	common.Info("已发送Catalog 200 OK响应")
+
+// 	// 定义完整的设备列表
+// 	devices := []CatalogItem{
+// 		{DeviceID: "34020000001320000021", Name: "1", Status: "OFF", Address: "100.101.138.10"},
+// 		{DeviceID: "34020000001320000002", Name: "2", Status: "ON", Address: "100.101.138.13"},
+// 		{DeviceID: "34020000001320000003", Name: "Camera 01", Status: "ON", Address: "100.101.138.18"},
+// 		{DeviceID: "34020000001320000004", Name: "3", Status: "OFF", Address: "100.101.138.12"},
+// 		{DeviceID: "34020000001320000005", Name: "4", Status: "OFF", Address: "100.101.138.14"},
+// 		{DeviceID: "34020000001320000006", Name: "5", Status: "OFF", Address: "100.101.138.15"},
+// 		{DeviceID: "34020000001320000007", Name: "6", Status: "OFF", Address: "100.101.138.11"},
+// 		{DeviceID: "34020000001320000008", Name: "7", Status: "OFF", Address: "100.101.138.16"},
+// 		{DeviceID: "34020000001320000009", Name: "8", Status: "OFF", Address: "100.101.138.19"},
+// 		{DeviceID: "34020000001320000010", Name: "9", Status: "OFF", Address: "100.101.138.20"},
+// 		{DeviceID: "34020000001320000013", Name: "10", Status: "OFF", Address: "100.101.138.21"},
+// 	}
+
+// 	// 构建XML响应
+// 	var deviceListXML strings.Builder
+// 	deviceListXML.WriteString(`<?xml version="1.0" encoding="GB2312"?>
+// <Response>
+//     <CmdType>Catalog</CmdType>
+//     <SN>1</SN>
+//     <DeviceID>` + config.DeviceID + `</DeviceID>
+//     <SumNum>` + strconv.Itoa(len(devices)) + `</SumNum>
+//     <DeviceList Num="` + strconv.Itoa(len(devices)) + `">`)
+
+// 	for _, dev := range devices {
+// 		deviceListXML.WriteString(`
+//         <Item>
+//             <DeviceID>` + dev.DeviceID + `</DeviceID>
+//             <Name>` + dev.Name + `</Name>
+//             <Manufacturer>Generic</Manufacturer>
+//             <Model>Camera</Model>
+//             <Owner>Owner</Owner>
+//             <CivilCode>CivilCode</CivilCode>
+//             <Address>` + dev.Address + `</Address>
+//             <Parental>0</Parental>
+//             <SafetyWay>0</SafetyWay>
+//             <RegisterWay>1</RegisterWay>
+//             <Secrecy>0</Secrecy>
+//             <Status>` + dev.Status + `</Status>
+//         </Item>`)
+// 	}
+
+// 	deviceListXML.WriteString(`
+//     </DeviceList>
+// </Response>`)
+
+// 	xmlBody := deviceListXML.String()
+// 	contentLength := len(xmlBody)
+
+// 	// 构建发送设备列表的消息
+// 	deviceListMessage := fmt.Sprintf(
+// 		"MESSAGE sip:%s@%s SIP/2.0\r\n"+
+// 			"Via: SIP/2.0/UDP %s:%s;rport;branch=%s\r\n"+
+// 			"From: <sip:%s@%s>;tag=%s\r\n"+
+// 			"To: <sip:%s@%s>;tag=%s\r\n"+
+// 			"Call-ID: %s\r\n"+
+// 			"CSeq: %d MESSAGE\r\n"+
+// 			"Content-Type: Application/MANSCDP+xml\r\n"+
+// 			"Max-Forwards: 70\r\n"+
+// 			"User-Agent: Embedded Net DVR/NVR/DVS\r\n"+
+// 			"Content-Length: %d\r\n\r\n%s",
+// 		config.DeviceID, config.DomainID,
+// 		config.LocalIP, config.LocalPort, branch,
+// 		config.DeviceID, config.DomainID, fromTag,
+// 		config.DeviceID, config.DomainID, toTag,
+// 		callID,
+// 		rand.Int63n(10000),
+// 		contentLength,
+// 		xmlBody,
+// 	)
+
+// 	// 发送设备列表消息
+// 	_, err = Conn.Write([]byte(deviceListMessage))
+// 	if err != nil {
+// 		return fmt.Errorf("发送设备列表消息失败: %v", err)
+// 	}
+
+//		common.Info("已发送设备列表消息")
+//		return nil
+//	}
+//
+// HandleCatalog 处理接收到的 Catalog 消息并返回设备列表
 func HandleCatalog(config *Config, request string) error {
 	fmt.Println("收到Catalog请求")
 	if Conn == nil {
@@ -333,37 +473,33 @@ func HandleCatalog(config *Config, request string) error {
 	via := viaMatches[1]
 	fmt.Printf("via: %s\n", via)
 
-	// 生成更可靠的分支和标签
+	// 生成分支和标签
 	branch := fmt.Sprintf("z9hG4bK%d", time.Now().UnixNano())
 	toTag := fmt.Sprintf("to-%d", time.Now().UnixNano())
 
-	// 第一步：立即返回200 OK响应
-	firstResponse := fmt.Sprintf(
+	// 返回200 OK响应
+	response200 := fmt.Sprintf(
 		"SIP/2.0 200 OK\r\n"+
 			"Via: %s\r\n"+
-			"From: <sip:%s@%s:5060>;tag=%s\r\n"+
-			"To: <sip:%s@%s:%s>;tag=%s\r\n"+
+			"From: <sip:%s@%s>;tag=%s\r\n"+
+			"To: <sip:%s@%s>;tag=%s\r\n"+
 			"Call-ID: %s\r\n"+
 			"CSeq: %s MESSAGE\r\n"+
-			"User-agent: Embedded Net smaiDVR/NVR/DVS\r\n"+
 			"Content-Length: 0\r\n\r\n",
-		// config.ServerIP, config.ServerPort, config.ServerPort, branch,
 		via,
 		config.ServerID, config.ServerIP, fromTag,
-		config.DeviceID, config.LocalIP, config.LocalPort, toTag,
+		config.DeviceID, config.LocalIP, toTag,
 		callID,
 		cseq,
 	)
 
-	// 发送200 OK响应
-	_, err := Conn.Write([]byte(firstResponse))
+	_, err := Conn.Write([]byte(response200))
 	if err != nil {
 		return fmt.Errorf("发送200 OK响应失败: %v", err)
 	}
-
 	common.Info("已发送Catalog 200 OK响应")
 
-	// 定义完整的设备列表
+	// 构建设备列表
 	devices := []CatalogItem{
 		{DeviceID: "34020000001320000021", Name: "1", Status: "OFF", Address: "100.101.138.10"},
 		{DeviceID: "34020000001320000002", Name: "2", Status: "ON", Address: "100.101.138.13"},
@@ -378,7 +514,6 @@ func HandleCatalog(config *Config, request string) error {
 		{DeviceID: "34020000001320000013", Name: "10", Status: "OFF", Address: "100.101.138.21"},
 	}
 
-	// 构建XML响应
 	var deviceListXML strings.Builder
 	deviceListXML.WriteString(`<?xml version="1.0" encoding="GB2312"?>
 <Response>
@@ -395,17 +530,10 @@ func HandleCatalog(config *Config, request string) error {
             <Name>` + dev.Name + `</Name>
             <Manufacturer>Generic</Manufacturer>
             <Model>Camera</Model>
-            <Owner>Owner</Owner>
-            <CivilCode>CivilCode</CivilCode>
             <Address>` + dev.Address + `</Address>
-            <Parental>0</Parental>
-            <SafetyWay>0</SafetyWay>
-            <RegisterWay>1</RegisterWay>
-            <Secrecy>0</Secrecy>
             <Status>` + dev.Status + `</Status>
         </Item>`)
 	}
-
 	deviceListXML.WriteString(`
     </DeviceList>
 </Response>`)
@@ -413,8 +541,8 @@ func HandleCatalog(config *Config, request string) error {
 	xmlBody := deviceListXML.String()
 	contentLength := len(xmlBody)
 
-	// 构建发送设备列表的消息
-	deviceListMessage := fmt.Sprintf(
+	// 发送设备列表消息
+	catalogMessage := fmt.Sprintf(
 		"MESSAGE sip:%s@%s SIP/2.0\r\n"+
 			"Via: SIP/2.0/UDP %s:%s;rport;branch=%s\r\n"+
 			"From: <sip:%s@%s>;tag=%s\r\n"+
@@ -422,10 +550,8 @@ func HandleCatalog(config *Config, request string) error {
 			"Call-ID: %s\r\n"+
 			"CSeq: %d MESSAGE\r\n"+
 			"Content-Type: Application/MANSCDP+xml\r\n"+
-			"Max-Forwards: 70\r\n"+
-			"User-Agent: Embedded Net DVR/NVR/DVS\r\n"+
 			"Content-Length: %d\r\n\r\n%s",
-		config.DeviceID, config.DomainID,
+		config.ServerID, config.DomainID,
 		config.LocalIP, config.LocalPort, branch,
 		config.DeviceID, config.DomainID, fromTag,
 		config.DeviceID, config.DomainID, toTag,
@@ -435,8 +561,7 @@ func HandleCatalog(config *Config, request string) error {
 		xmlBody,
 	)
 
-	// 发送设备列表消息
-	_, err = Conn.Write([]byte(deviceListMessage))
+	_, err = Conn.Write([]byte(catalogMessage))
 	if err != nil {
 		return fmt.Errorf("发送设备列表消息失败: %v", err)
 	}
