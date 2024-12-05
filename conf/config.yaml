@@ -1,11 +1,17 @@
 
 # config.yaml
+
+# 本地NVR模拟
 device_id: "34020000001110000011" # 本地NVR模拟的ID
 local_ip: "100.100.155.157" # 本地NVR模拟的IP地址
-local_port: "5060" # 本地NVR模拟的端口
-server_id: "62010000002000000001" # 服务器ID
+local_port: "5061" # 本地NVR模拟的端口
+
+
+# 设备接收端
+server_id: "62010000002000000001" # 设备接收端ID
 server_ip: "100.100.150.220" # 服务器的IP地址
-server_port: "5060" # 服务器的端口
+# server_ip: "100.100.155.157" # 设备接收端的IP地址
+server_port: "5060" # 设备接收端的端口
 domain_id: "1000000000" # 添加域ID配置
 keepalive_interval: 30 # 保活消息的发送间隔（秒）
 password: ""  # 添加这行

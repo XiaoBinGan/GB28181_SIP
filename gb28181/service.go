@@ -24,30 +24,36 @@ var (
 
 // Catalog 结构体用于存储设备目录信息
 type CatalogItem struct {
-	DeviceID  string
-	Name      string
-	Status    string
-	Longitude string
-	Latitude  string
-	Address   string
+	DeviceID  string //设备ID
+	Name      string //设备名称
+	Status    string //设备状态
+	Longitude string //经度
+	Latitude  string //纬度
+	Address   string //地址
 }
 
 /******************************************************test add **********************************************************************/
 
 // Config 结构体用于加载配置文件
 type Config struct {
-	DeviceID          string `yaml:"device_id"`
-	LocalIP           string `yaml:"local_ip"`
-	LocalPort         string `yaml:"local_port"`
-	ServerIP          string `yaml:"server_ip"`
-	ServerPort        string `yaml:"server_port"`
-	ServerID          string `yaml:"server_id"`
-	DomainID          string `yaml:"domain_id"` // 添加域ID配置
-	KeepaliveInterval int    `yaml:"keepalive_interval"`
-	Password          string `yaml:"password"`
+	DeviceID          string `yaml:"device_id"`          //本地NVR模拟的ID
+	LocalIP           string `yaml:"local_ip"`           //本地NVR模拟的IP地址
+	LocalPort         string `yaml:"local_port"`         //本地NVR模拟的端口
+	ServerIP          string `yaml:"server_ip"`          //服务器的IP地址
+	ServerPort        string `yaml:"server_port"`        //服务器的端口
+	ServerID          string `yaml:"server_id"`          //服务器的ID
+	DomainID          string `yaml:"domain_id"`          // 添加域ID配置
+	KeepaliveInterval int    `yaml:"keepalive_interval"` //心跳间隔时间
+	Password          string `yaml:"password"`           //密码
 }
 
-// LoadConfig 从指定路径加载 YAML 配置文件
+/**
+ * @Name: LoadConfig
+ * @Description:LoadConfig 从指定路径加载 YAML 配置文件
+ * @param path
+ * @return *Config
+ * @return error
+ */
 func LoadConfig(path string) (*Config, error) {
 	config := &Config{}
 	data, err := ioutil.ReadFile(path)
@@ -61,7 +67,13 @@ func LoadConfig(path string) (*Config, error) {
 	return config, nil
 }
 
-// RegisterNVR 向其他平台发送注册请求以伪装成NVR设备。
+/**
+ * @Name: RegisterNVR
+ * @Description:RegisterNVR 向其他平台发送注册请求以伪装成NVR设备。
+ * @param config
+ * @return net.UDPConn
+ * @return error
+ */
 func RegisterNVR(config *Config) (*net.UDPConn, error) {
 	// 设置连接
 	serverAddr := fmt.Sprintf("%s:%s", config.ServerIP, config.ServerPort)
@@ -116,11 +128,18 @@ func RegisterNVR(config *Config) (*net.UDPConn, error) {
 	// 接收401响应
 	buffer := make([]byte, 4096)
 	n, err := conn.Read(buffer)
+
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %v", err)
 	}
 
 	response := string(buffer[:n])
+	/***** 401响应处理 */
+	if strings.Contains(string(buffer[:n]), "200 OK") {
+		common.Info("收到的200响应: %s", response)
+		return conn, nil
+	}
+	/***** 401响应处理 */
 	common.Info("收到的401响应: %s", response)
 
 	// 解析realm和nonce
@@ -188,7 +207,12 @@ func RegisterNVR(config *Config) (*net.UDPConn, error) {
 	return conn, nil
 }
 
-// SendKeepalive 向平台发送保活消息，模拟NVR设备在线状态。
+/**
+ * @Name: SendKeepalive
+ * @Description: 向平台发送保活消息，模拟NVR设备在线状态。
+ * @param config 设备配置信息
+ * @return error 错误信息
+ */
 func SendKeepalive(config *Config) error {
 	if Conn == nil {
 		return fmt.Errorf("全局连接未初始化")
@@ -231,7 +255,12 @@ func SendKeepalive(config *Config) error {
 	return nil
 }
 
-// 模拟NVR设备的主程序入口 在 SimulateNVR 函数中初始化全局连接并保持运行，确保连接只关闭一次：
+/**
+ * @Name SimulateNVR
+ * @Description:  模拟NVR设备的主程序入口 在 SimulateNVR 函数中初始化全局连接并保持运行，确保连接只关闭一次：
+ * @param configPath 配置文件路径
+ * @return error
+ */
 func SimulateNVR(configPath string) {
 	config, err := LoadConfig(configPath)
 	if err != nil {
@@ -268,7 +297,7 @@ func SimulateNVR(configPath string) {
 	ticker := time.NewTicker(time.Duration(config.KeepaliveInterval) * time.Second)
 	defer ticker.Stop()
 	/******************************************************test add **********************************************************************/
-
+	// 启动一个协程处理消息
 	go func() {
 		for {
 			select {
@@ -305,147 +334,13 @@ func SimulateNVR(configPath string) {
 	}
 }
 
-// HandleCatalog 处理接收到的Catalog消息并返回响应
-// func HandleCatalog(config *Config, request string) error {
-// 	fmt.Println("收到Catalog请求")
-// 	if Conn == nil {
-// 		return fmt.Errorf("全局连接未初始化")
-// 	}
-
-// 	// 解析请求信息
-// 	callIDRe := regexp.MustCompile(`Call-ID: (.+?)\r\n`)
-// 	fromTagRe := regexp.MustCompile(`From:.*?tag=(.+?)\r\n`)
-// 	cseqRe := regexp.MustCompile(`CSeq: (\d+)`)
-// 	viaRe := regexp.MustCompile(`Via: (.+?)\r\n`)
-
-// 	callIDMatches := callIDRe.FindStringSubmatch(request)
-// 	fromTagMatches := fromTagRe.FindStringSubmatch(request)
-// 	cseqMatches := cseqRe.FindStringSubmatch(request)
-// 	viaMatches := viaRe.FindStringSubmatch(request)
-
-// 	if len(callIDMatches) < 2 || len(fromTagMatches) < 2 || len(cseqMatches) < 2 || len(viaMatches) < 2 {
-// 		return fmt.Errorf("无法解析SIP消息头")
-// 	}
-
-// 	callID := callIDMatches[1]
-// 	fromTag := fromTagMatches[1]
-// 	cseq := cseqMatches[1]
-// 	via := viaMatches[1]
-// 	fmt.Printf("via: %s\n", via)
-
-// 	// 生成更可靠的分支和标签
-// 	branch := fmt.Sprintf("z9hG4bK%d", time.Now().UnixNano())
-// 	toTag := fmt.Sprintf("to-%d", time.Now().UnixNano())
-
-// 	// 第一步：立即返回200 OK响应
-// 	firstResponse := fmt.Sprintf(
-// 		"SIP/2.0 200 OK\r\n"+
-// 			"Via: %s\r\n"+
-// 			"From: <sip:%s@%s:5060>;tag=%s\r\n"+
-// 			"To: <sip:%s@%s:%s>;tag=%s\r\n"+
-// 			"Call-ID: %s\r\n"+
-// 			"CSeq: %s MESSAGE\r\n"+
-// 			"User-agent: Embedded Net smaiDVR/NVR/DVS\r\n"+
-// 			"Content-Length: 0\r\n\r\n",
-// 		// config.ServerIP, config.ServerPort, config.ServerPort, branch,
-// 		via,
-// 		config.ServerID, config.ServerIP, fromTag,
-// 		config.DeviceID, config.LocalIP, config.LocalPort, toTag,
-// 		callID,
-// 		cseq,
-// 	)
-
-// 	// 发送200 OK响应
-// 	_, err := Conn.Write([]byte(firstResponse))
-// 	if err != nil {
-// 		return fmt.Errorf("发送200 OK响应失败: %v", err)
-// 	}
-
-// 	common.Info("已发送Catalog 200 OK响应")
-
-// 	// 定义完整的设备列表
-// 	devices := []CatalogItem{
-// 		{DeviceID: "34020000001320000021", Name: "1", Status: "OFF", Address: "100.101.138.10"},
-// 		{DeviceID: "34020000001320000002", Name: "2", Status: "ON", Address: "100.101.138.13"},
-// 		{DeviceID: "34020000001320000003", Name: "Camera 01", Status: "ON", Address: "100.101.138.18"},
-// 		{DeviceID: "34020000001320000004", Name: "3", Status: "OFF", Address: "100.101.138.12"},
-// 		{DeviceID: "34020000001320000005", Name: "4", Status: "OFF", Address: "100.101.138.14"},
-// 		{DeviceID: "34020000001320000006", Name: "5", Status: "OFF", Address: "100.101.138.15"},
-// 		{DeviceID: "34020000001320000007", Name: "6", Status: "OFF", Address: "100.101.138.11"},
-// 		{DeviceID: "34020000001320000008", Name: "7", Status: "OFF", Address: "100.101.138.16"},
-// 		{DeviceID: "34020000001320000009", Name: "8", Status: "OFF", Address: "100.101.138.19"},
-// 		{DeviceID: "34020000001320000010", Name: "9", Status: "OFF", Address: "100.101.138.20"},
-// 		{DeviceID: "34020000001320000013", Name: "10", Status: "OFF", Address: "100.101.138.21"},
-// 	}
-
-// 	// 构建XML响应
-// 	var deviceListXML strings.Builder
-// 	deviceListXML.WriteString(`<?xml version="1.0" encoding="GB2312"?>
-// <Response>
-//     <CmdType>Catalog</CmdType>
-//     <SN>1</SN>
-//     <DeviceID>` + config.DeviceID + `</DeviceID>
-//     <SumNum>` + strconv.Itoa(len(devices)) + `</SumNum>
-//     <DeviceList Num="` + strconv.Itoa(len(devices)) + `">`)
-
-// 	for _, dev := range devices {
-// 		deviceListXML.WriteString(`
-//         <Item>
-//             <DeviceID>` + dev.DeviceID + `</DeviceID>
-//             <Name>` + dev.Name + `</Name>
-//             <Manufacturer>Generic</Manufacturer>
-//             <Model>Camera</Model>
-//             <Owner>Owner</Owner>
-//             <CivilCode>CivilCode</CivilCode>
-//             <Address>` + dev.Address + `</Address>
-//             <Parental>0</Parental>
-//             <SafetyWay>0</SafetyWay>
-//             <RegisterWay>1</RegisterWay>
-//             <Secrecy>0</Secrecy>
-//             <Status>` + dev.Status + `</Status>
-//         </Item>`)
-// 	}
-
-// 	deviceListXML.WriteString(`
-//     </DeviceList>
-// </Response>`)
-
-// 	xmlBody := deviceListXML.String()
-// 	contentLength := len(xmlBody)
-
-// 	// 构建发送设备列表的消息
-// 	deviceListMessage := fmt.Sprintf(
-// 		"MESSAGE sip:%s@%s SIP/2.0\r\n"+
-// 			"Via: SIP/2.0/UDP %s:%s;rport;branch=%s\r\n"+
-// 			"From: <sip:%s@%s>;tag=%s\r\n"+
-// 			"To: <sip:%s@%s>;tag=%s\r\n"+
-// 			"Call-ID: %s\r\n"+
-// 			"CSeq: %d MESSAGE\r\n"+
-// 			"Content-Type: Application/MANSCDP+xml\r\n"+
-// 			"Max-Forwards: 70\r\n"+
-// 			"User-Agent: Embedded Net DVR/NVR/DVS\r\n"+
-// 			"Content-Length: %d\r\n\r\n%s",
-// 		config.DeviceID, config.DomainID,
-// 		config.LocalIP, config.LocalPort, branch,
-// 		config.DeviceID, config.DomainID, fromTag,
-// 		config.DeviceID, config.DomainID, toTag,
-// 		callID,
-// 		rand.Int63n(10000),
-// 		contentLength,
-// 		xmlBody,
-// 	)
-
-// 	// 发送设备列表消息
-// 	_, err = Conn.Write([]byte(deviceListMessage))
-// 	if err != nil {
-// 		return fmt.Errorf("发送设备列表消息失败: %v", err)
-// 	}
-
-//		common.Info("已发送设备列表消息")
-//		return nil
-//	}
-//
-// HandleCatalog 处理接收到的 Catalog 消息并返回设备列表
+/**
+ * @Name: HandleCatalog
+ * @Description:  HandleCatalog 处理接收到的 Catalog 消息并返回设备列表
+ * @param config 配置信息
+ * @param request 请求信息
+ * @return error 错误信息
+ */
 func HandleCatalog(config *Config, request string) error {
 	fmt.Println("收到Catalog请求")
 	if Conn == nil {
@@ -516,27 +411,26 @@ func HandleCatalog(config *Config, request string) error {
 
 	var deviceListXML strings.Builder
 	deviceListXML.WriteString(`<?xml version="1.0" encoding="GB2312"?>
-<Response>
-    <CmdType>Catalog</CmdType>
-    <SN>1</SN>
-    <DeviceID>` + config.DeviceID + `</DeviceID>
-    <SumNum>` + strconv.Itoa(len(devices)) + `</SumNum>
-    <DeviceList Num="` + strconv.Itoa(len(devices)) + `">`)
-
+	<Response>
+		<CmdType>Catalog</CmdType>
+		<SN>1</SN>
+		<DeviceID>` + config.DeviceID + `</DeviceID>
+		<SumNum>` + strconv.Itoa(len(devices)) + `</SumNum>
+		<DeviceList Num="` + strconv.Itoa(len(devices)) + `">`)
 	for _, dev := range devices {
 		deviceListXML.WriteString(`
-        <Item>
-            <DeviceID>` + dev.DeviceID + `</DeviceID>
-            <Name>` + dev.Name + `</Name>
-            <Manufacturer>Generic</Manufacturer>
-            <Model>Camera</Model>
-            <Address>` + dev.Address + `</Address>
-            <Status>` + dev.Status + `</Status>
-        </Item>`)
+				<Item>
+					<DeviceID>` + dev.DeviceID + `</DeviceID>
+					<Name>` + dev.Name + `</Name>
+					<Manufacturer>Generic</Manufacturer>
+					<Model>Camera</Model>
+					<Address>` + dev.Address + `</Address>
+					<Status>` + dev.Status + `</Status>
+				</Item>`)
 	}
 	deviceListXML.WriteString(`
-    </DeviceList>
-</Response>`)
+		</DeviceList>
+	</Response>`)
 
 	xmlBody := deviceListXML.String()
 	contentLength := len(xmlBody)
@@ -569,32 +463,3 @@ func HandleCatalog(config *Config, request string) error {
 	common.Info("已发送设备列表消息")
 	return nil
 }
-
-// 解释
-
-// 	1.	Config 结构体: 定义配置参数的结构体，包含设备ID、本地和服务器IP地址、端口等。
-// 	2.	LoadConfig 函数: 从 YAML 文件 config.yaml 中加载配置参数。
-// 	3.	RegisterNVR 和 SendKeepalive 函数: 使用 Config 参数代替硬编码的信息。
-// 	4.	SimulateNVR 函数: 接收配置文件路径参数，加载配置并运行主逻辑。
-
-// 这样，修改配置只需编辑 config.yaml 文件即可，而无需更改代码。
-
-// 我们可以将硬编码的配置（如DeviceID、NVRPort等）提取出来，并使用配置文件或环境变量的方式灵活设置这些参数。这样在不同的运行环境中可以使用不同的配置而无需修改代码。
-
-// 以下是改进版本的nvr_simulator.go，使用配置结构体来加载外部参数：
-
-// 新增配置文件
-
-// 创建一个配置文件 config.yaml，用于定义设备信息和服务器地址等参数：
-
-// # config.yaml
-// device_id: "34020000001110000011"
-// local_ip: "100.100.155.157"
-// local_port: "5061" # 本地NVR模拟的端口
-// server_ip: "192.168.1.100" # 服务器的IP地址
-// server_port: "5060" # 服务器的端口
-// keepalive_interval: 30 # 保活消息的发送间隔（秒）
-
-// 更新代码 nvr_simulator.go
-
-// 在新的代码中，我们增加了 Config 结构体，并从配置文件中读取参数，取代硬编码的配置。
