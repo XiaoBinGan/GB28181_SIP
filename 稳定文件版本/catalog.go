@@ -1,4 +1,4 @@
-package gb28181backup
+package gb28181
 
 import (
 	"bytes"
@@ -53,7 +53,13 @@ const (
 	MaxAttempts     = 5                // 最大尝试次数
 )
 
-// handleIncomingMessage 处理传入的UDP消息。
+/**
+ * @Name handleIncomingMessage
+ * @Description 处理传入的UDP消息
+ * @param conn UDP连接
+ * @return net.UDPAddr, error
+ */
+
 func handleIncomingMessage(conn *net.UDPConn) (*net.UDPAddr, error) {
 	buffer := make([]byte, 4096)
 	conn.SetReadDeadline(time.Now().Add(Timeout))
@@ -81,7 +87,14 @@ func handleIncomingMessage(conn *net.UDPConn) (*net.UDPAddr, error) {
 	}
 }
 
-// handleKeepalive 处理保活通知。
+/**
+ * @Name handleKeepalive
+ * @Description 处理保活通知
+ * @param conn UDP连接
+ * @param remoteAddr 远程地址
+ * @param message 消息内容
+ * @return void
+ */
 func handleKeepalive(conn *net.UDPConn, remoteAddr *net.UDPAddr, message string) {
 	var keepalive KeepaliveNotify
 	xmlContent := extractXMLContent(message)
@@ -98,6 +111,15 @@ func handleKeepalive(conn *net.UDPConn, remoteAddr *net.UDPAddr, message string)
 }
 
 // c_sendSIPResponse 构建并发送SIP响应。
+/**
+ * @Name c_sendSIPResponse
+ * @Description 构建并发送SIP响应
+ * @param conn UDP连接
+ * @param remoteAddr 远程地址
+ * @param originalMessage 原始消息
+ * @param statusCode 响应状态码
+ * @return void
+ */
 func c_sendSIPResponse(conn *net.UDPConn, remoteAddr *net.UDPAddr, originalMessage, statusCode string) {
 	response := fmt.Sprintf("SIP/2.0 %s\r\n", statusCode) +
 		"Via: " + extractHeader(originalMessage, "Via:") + "\r\n" +
@@ -116,7 +138,13 @@ func c_sendSIPResponse(conn *net.UDPConn, remoteAddr *net.UDPAddr, originalMessa
 	}
 }
 
-// extractHeader 从SIP消息中提取特定的头部。
+/**
+ * @Name extractHeader
+ * @Description 从SIP消息中提取特定的头部
+ * @param message SIP消息
+ * @param header 头部名称
+ * @return string
+ */
 func extractHeader(message, header string) string {
 	lines := strings.Split(message, "\r\n")
 	for _, line := range lines {
@@ -127,17 +155,12 @@ func extractHeader(message, header string) string {
 	return ""
 }
 
-// extractXMLContent 从SIP消息中提取XML内容。
-//
-//	func extractXMLContent(message string) string {
-//		xmlStart := strings.Index(message, "<?xml")
-//		if xmlStart == -1 {
-//			return ""
-//		}
-//		return message[xmlStart:]
-//	}
-//
-// 提取XML内容的改进版本
+/**
+ * @Name extractXMLContent
+ * @Description 从SIP消息中提取XML内容
+ * @param message SIP消息
+ * @return string
+ */
 func extractXMLContent(message string) string {
 	parts := strings.Split(message, "\r\n\r\n")
 	if len(parts) < 2 {
@@ -153,6 +176,13 @@ func extractXMLContent(message string) string {
 	return parts[1][xmlStart:]
 }
 
+/**
+ * @Name sendCatalogQuery
+ * @Description 发送目录查询
+ * @param conn UDP连接
+ * @param serverAddr 服务器地址
+ * @return error
+ */
 func sendCatalogQuery(conn *net.UDPConn, serverAddr *net.UDPAddr) error {
 	catalogQuery := "MESSAGE sip:34020000001110000011@6201000000 SIP/2.0\r\n" +
 		"Via: SIP/2.0/UDP 100.100.155.157:5060;rport;branch=z9hG4bK" + fmt.Sprint(time.Now().UnixNano()) + "\r\n" +
@@ -185,7 +215,12 @@ func sendCatalogQuery(conn *net.UDPConn, serverAddr *net.UDPAddr) error {
 	return fmt.Errorf("发送目录查询失败，已达到最大尝试次数")
 }
 
-// receiveAndParseCatalogResponse 接收并解析目录响应。
+/**
+ * @Name receiveAndParseCatalogResponse
+ * @Description 接收并解析目录响应
+ * @param conn UDP连接
+ * @return error
+ */
 func receiveAndParseCatalogResponse(conn *net.UDPConn) error {
 	buffer := make([]byte, 4096)
 	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
@@ -243,7 +278,13 @@ func receiveAndParseCatalogResponse(conn *net.UDPConn) error {
 	return nil
 }
 
-// parseXML 将XML内容解码到提供的结构体中。
+/**
+ * @Name parseXML
+ * @Description 将XML内容解码到提供的结构体中。
+ * @param xmlContent XML内容
+ * @param v 解码的目标结构体
+ * @return error
+ */
 func parseXML(xmlContent string, v interface{}) error {
 	decoder := xml.NewDecoder(bytes.NewReader([]byte(xmlContent)))
 	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
@@ -255,7 +296,12 @@ func parseXML(xmlContent string, v interface{}) error {
 	return decoder.Decode(v)
 }
 
-// Getdevice 函数初始化UDP通信。
+/**
+ * @Name Getdevice
+ * @Description 初始化UDP通信
+ * @param t 协议类型
+ * @param addr 地址
+ */
 func Getdevice(t string, addr string) {
 	localAddr, err := net.ResolveUDPAddr(t, addr)
 	if err != nil {

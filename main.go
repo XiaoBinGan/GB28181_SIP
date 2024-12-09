@@ -10,6 +10,8 @@ func main() {
 	/**
 	 * 1.对接下级设备获取设备列表
 	 */
+	// gb28181.Getdevice("conf/sipclient.yaml")
+
 	// gb28181.Getdevice("udp", "100.100.155.157:5060")
 	/**
 	 * 2.对接上级平台级设备获取设备列表
