@@ -12,7 +12,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -22,7 +21,7 @@ import (
 
 // 查询状态结构体
 type QueryState struct {
-	sync.Mutex         //加锁确保数线程安全
+	// sync.Mutex         //加锁确保数线程安全
 	FirstStageComplete bool
 	DeviceList         []Device
 	TotalDevices       int
@@ -487,9 +486,9 @@ func receiveAndParseCatalogResponse(conn *net.UDPConn, state *QueryState) error 
 
 	common.Infof("解析的目录响应: 总设备数: %d, 设备列表: %d", catalogResponse.SumNum, len(catalogResponse.DeviceList.Item))
 	// 更新状态，保护临界区
-	state.Lock()
-	defer state.Unlock()
-	// 更新状态
+	// state.Lock()
+	// defer state.Unlock()
+	// 更新状态``
 	if !state.FirstStageComplete {
 		state.TotalDevices = catalogResponse.SumNum
 		state.DeviceList = catalogResponse.DeviceList.Item

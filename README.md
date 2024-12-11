@@ -19,8 +19,17 @@
 
 
 
+# build
+```
+./build/&push.sh
+sudo docker build  -f Dockerfile -t sip .
 
+```
+run 
 
+```
+docker run -d -p 5060:5060 --name gb28181-container gb28181-app
+```
 
 
 
