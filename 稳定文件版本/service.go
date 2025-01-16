@@ -357,7 +357,7 @@ func SimulateNVR(configPath string) {
 		return
 	}
 
-	common.Info("模拟 NVR 设备启动...")
+	common.Info("拟 NVR 设备启动...")
 	Conn, err = RegisterNVR(config)
 	if err != nil {
 		common.Errorf("注册失败: %v", err)

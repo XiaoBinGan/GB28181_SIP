@@ -34,7 +34,14 @@ docker run -d -p 5060:5060 --name gb28181-container gb28181-app
 
 
 
+linux build
 
+```
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sipClient  main.go
+```
+```
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sipServer  main.go
+```
 
 
 

@@ -3,6 +3,7 @@ package gb28181
 import (
 	"28181sip/common"
 	"crypto/md5"
+	"encoding/xml"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -10,17 +11,215 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v2"
 )
 
+// 图片的xml内部数据
+type ImageData struct {
+	XMLName     xml.Name `xml:"Image"`
+	CmdType     string   `xml:"CmdType"`
+	SN          int      `xml:"SN"`
+	DeviceID    string   `xml:"DeviceID"`
+	ImageID     string   `xml:"ImageID"`     // 图片ID
+	ImageData   string   `xml:"ImageData"`   // 分片数据
+	TotalChunks int      `xml:"TotalChunks"` // 总分片数
+	ChunkIndex  int      `xml:"ChunkIndex"`  // 当前分片索引
+}
+
+// 图片分片存储结构
+type ImageChunk struct {
+	Data        string
+	ChunkIndex  int
+	TotalChunks int
+	Timestamp   time.Time
+}
+
 var (
-	Conn *net.UDPConn
-	// err  error
+	// 使用 map 存储每个图片的分片数据
+	imageChunks = make(map[string]map[int]*ImageChunk)
+	chunkMutex  = &sync.Mutex{}
 )
 
-/******************************************************test add **********************************************************************/
+/**
+ * @Name: HandleInfo
+ * @Description: HandleInfo 处理接收到的 INFO 消息并返回响应
+ * @param config 配置信息
+ * @param request 请求信息
+ * @return error 错误信息
+ */
+
+func HandleInfo(config *Config, request string) error {
+	fmt.Println("HandleInfo")
+	if Conn == nil {
+		return fmt.Errorf("全局连接未初始化")
+	}
+
+	// 解析SIP消息头
+	callIDRe := regexp.MustCompile(`Call-ID: (.+?)_(\d+)\r\n`)
+	fromTagRe := regexp.MustCompile(`From:.*?tag=(.+?)\r\n`)
+	cseqRe := regexp.MustCompile(`CSeq: (\d+)`)
+	viaRe := regexp.MustCompile(`Via: (.+?)\r\n`)
+
+	callIDMatches := callIDRe.FindStringSubmatch(request)
+	fromTagMatches := fromTagRe.FindStringSubmatch(request)
+	cseqMatches := cseqRe.FindStringSubmatch(request)
+	viaMatches := viaRe.FindStringSubmatch(request)
+
+	if len(callIDMatches) < 3 {
+		return fmt.Errorf("无法解析Call-ID")
+	}
+
+	imageID := callIDMatches[1]                     // 图片ID
+	chunkIndex, _ := strconv.Atoi(callIDMatches[2]) // 分片索引
+
+	// 提取XML内容
+	payloadStart := strings.Index(request, "\r\n\r\n") + 4
+	if payloadStart < 4 {
+		return fmt.Errorf("未找到XML负载")
+	}
+	xmlContent := request[payloadStart:]
+
+	// 打印XML内容以便调试
+	fmt.Printf("XML Content: %s\n", xmlContent)
+
+	// 解析XML数据
+	var imgData ImageData
+	if err := xml.Unmarshal([]byte(xmlContent), &imgData); err != nil {
+		return fmt.Errorf("解析XML失败: %v", err)
+	}
+
+	// 打印解析后的结构体以便调试
+	fmt.Printf("Parsed ImageData: %+v\n", imgData)
+
+	// 处理分片数据
+	chunkMutex.Lock()
+	defer chunkMutex.Unlock()
+
+	// 初始化图片分片存储
+	if _, exists := imageChunks[imageID]; !exists {
+		imageChunks[imageID] = make(map[int]*ImageChunk)
+	}
+
+	// 存储分片数据
+	imageChunks[imageID][chunkIndex] = &ImageChunk{
+		Data:        imgData.ImageData,
+		ChunkIndex:  chunkIndex,
+		TotalChunks: imgData.TotalChunks, // 使用 XML 中的 TotalChunks
+		Timestamp:   time.Now(),
+	}
+
+	fmt.Printf("已接收图片分片: ID=%s, 索引=%d, 总分片数=%d\n", imageID, chunkIndex, imgData.TotalChunks)
+
+	// 检查是否所有分片都已接收
+	chunks := imageChunks[imageID]
+	fmt.Printf("len(chunks):%#v \n", len(chunks))
+	fmt.Printf("TotalChunks:%#v \n", imgData.TotalChunks)
+	if len(chunks) == imgData.TotalChunks { // 动态判断是否收到所有分片
+		// 按顺序合并分片
+		var completeImage strings.Builder
+		for i := 0; i < imgData.TotalChunks; i++ {
+			if chunk, ok := chunks[i]; ok {
+				completeImage.WriteString(chunk.Data)
+			} else {
+				fmt.Printf("缺少分片: ID=%s, 索引=%d\n", imageID, i)
+				return nil
+			}
+		}
+
+		// 保存完整图片数据
+		completeImageData := completeImage.String()
+		fmt.Printf("图片接收完成: ID=%s, 总分片数=%d\n", imageID, len(chunks))
+		fmt.Printf("完整图片数据: %s\n", completeImageData)
+
+		// 清理已处理的分片数据
+		delete(imageChunks, imageID)
+
+		// 这里可以添加保存或处理完整图片的代码
+		// 例如: saveImage(imageID, completeImageData)
+	}
+
+	// 发送200 OK响应
+	response200 := fmt.Sprintf(
+		"SIP/2.0 200 OK\r\n"+
+			"Via: %s\r\n"+
+			"From: <sip:%s@%s>;tag=%s\r\n"+
+			"To: <sip:%s@%s>;tag=to-%d\r\n"+
+			"Call-ID: %s_%d\r\n"+
+			"CSeq: %s INFO\r\n"+
+			"Content-Length: 0\r\n\r\n",
+		viaMatches[1],
+		config.ServerID, config.ServerIP, fromTagMatches[1],
+		config.DeviceID, config.LocalIP, time.Now().UnixNano(),
+		imageID, chunkIndex,
+		cseqMatches[1],
+	)
+
+	_, err := Conn.Write([]byte(response200))
+	if err != nil {
+		return fmt.Errorf("发送200 OK响应失败: %v", err)
+	}
+
+	return nil
+}
+
+/**接收小文件的版本
+var (
+	imageChunks = make(map[string][]string) // key: ImageID, value: chunks
+	chunkMutex  = &sync.Mutex{}             // 用于并发安全
+)
+
+func HandleInfo(config *Config, request string) error {
+	fmt.Println("收到INFO请求")
+	if Conn == nil {
+		return fmt.Errorf("全局连接未初始化")
+	}
+	// 解析请求信息
+	callIDRe := regexp.MustCompile(`Call-ID: (.+?)\r\n`)
+	fromTagRe := regexp.MustCompile(`From:.*?tag=(.+?)\r\n`)
+	cseqRe := regexp.MustCompile(`CSeq: (\d+)`)
+	viaRe := regexp.MustCompile(`Via: (.+?)\r\n`)
+	callIDMatches := callIDRe.FindStringSubmatch(request)
+	fromTagMatches := fromTagRe.FindStringSubmatch(request)
+	cseqMatches := cseqRe.FindStringSubmatch(request)
+	viaMatches := viaRe.FindStringSubmatch(request)
+	if len(callIDMatches) < 2 || len(fromTagMatches) < 2 || len(cseqMatches) < 2 || len(viaMatches) < 2 {
+		return fmt.Errorf("无法解析SIP消息头")
+	}
+	callID := callIDMatches[1]
+	fromTag := fromTagMatches[1]
+	cseq := cseqMatches[1]
+	via := viaMatches[1]
+	// 生成分支和标签
+	_ = fmt.Sprintf("z9hG4bK%d", time.Now().UnixNano())
+	toTag := fmt.Sprintf("to-%d", time.Now().UnixNano())
+	// 返回200 OK响应
+	response200 := fmt.Sprintf(
+		"SIP/2.0 200 OK\r\n"+
+			"Via: %s\r\n"+
+			"From: <sip:%s@%s>;tag=%s\r\n"+
+			"To: <sip:%s@%s>;tag=%s\r\n"+
+			"Call-ID: %s\r\n"+
+			"CSeq: %s INFO\r\n"+
+			"Content-Length: 0\r\n\r\n",
+		via,
+		config.ServerID, config.ServerIP, fromTag,
+		config.DeviceID, config.LocalIP, toTag,
+		callID,
+		cseq,
+	)
+
+	_, err := Conn.Write([]byte(response200))
+	if err != nil {
+		return fmt.Errorf("发送INFO的200 OK响应失败: %v", err)
+	}
+	common.Info("已发送INFO 200 OK响应")
+
+	return nil
+}
+*/
 
 // Catalog 结构体用于存储设备目录信息
 type CatalogItem struct {
@@ -31,8 +230,6 @@ type CatalogItem struct {
 	Latitude  string //纬度
 	Address   string //地址
 }
-
-/******************************************************test add **********************************************************************/
 
 // Config 结构体用于加载配置文件
 type Config struct {
@@ -274,11 +471,16 @@ func SimulateNVR(configPath string) {
 		common.Errorf("注册失败: %v", err)
 		return
 	}
-	defer Conn.Close() // 确保在程序退出时关闭连接
+	defer func() {
+		if Conn != nil {
+			Conn.Close()
+			common.Info("连接已关闭")
+		}
+	}()
 
-	/******************************************************test add **********************************************************************/
 	// 创建一个通道用于并发处理消息
-	msgChan := make(chan string, 10)
+	msgChan := make(chan string, 60)
+
 	// 启动消息接收协程
 	go func() {
 		buffer := make([]byte, 4096)
@@ -291,25 +493,29 @@ func SimulateNVR(configPath string) {
 			msgChan <- string(buffer[:n])
 		}
 	}()
-
-	/******************************************************test add **********************************************************************/
-
-	ticker := time.NewTicker(time.Duration(config.KeepaliveInterval) * time.Second)
-	defer ticker.Stop()
-	/******************************************************test add **********************************************************************/
 	// 启动一个协程处理消息
 	go func() {
-		for {
-			select {
-			case msg := <-msgChan:
-				common.Infof("收到消息: %s", msg)
-				// 处理消息逻辑
-			case <-time.After(5 * time.Minute): // 增加超时处理
-				common.Warn("长时间未收到消息")
+		for msg := range msgChan {
+			common.Infof("收到消息: %s", msg)
+
+			// 判断消息类型并处理
+			if strings.Contains(msg, "CmdType>Catalog") {
+				err := HandleCatalog(config, msg)
+				if err != nil {
+					common.Errorf("处理Catalog消息失败: %v", err)
+				}
+			} else if strings.Contains(msg, "INFO sip:") {
+				err := HandleInfo(config, msg)
+				if err != nil {
+					common.Errorf("处理INFO消息失败: %v", err)
+				}
 			}
 		}
 	}()
-	/******************************************************test add **********************************************************************/
+
+	// 定时发送保活消息
+	ticker := time.NewTicker(time.Duration(config.KeepaliveInterval) * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -318,19 +524,10 @@ func SimulateNVR(configPath string) {
 			if err != nil {
 				common.Errorf("发送保活失败: %v", err)
 			}
-		/******************************************************test add **********************************************************************/
-		case msg := <-msgChan:
-			// 判断消息类型
-			if strings.Contains(msg, "CmdType>Catalog") {
-				err := HandleCatalog(config, msg)
-				if err != nil {
-					common.Errorf("处理Catalog消息失败: %v", err)
-				}
-			}
-
+		case <-time.After(5 * time.Minute): // 增加超时处理
+			common.Warn("长时间未收到消息")
+			// 可以在这里增加重新连接或清理资源的逻辑
 		}
-		/******************************************************test add **********************************************************************/
-
 	}
 }
 

@@ -58,6 +58,9 @@ func init() {
 		zap.AddCaller(),
 		zap.AddCallerSkip(1)) //有时我们稍微封装了一下记录日志的方法，但是我们希望输出的文件名和行号是调用封装函数的位置。这时可以使用zap.AddCallerSkip(skip int)向上跳 1 层：
 	logger = log.Sugar()
+	// 确保日志缓冲区在程序退出前刷新
+	defer logger.Sync()
+
 }
 func Debug(args ...interface{}) {
 	logger.Debug(args)
