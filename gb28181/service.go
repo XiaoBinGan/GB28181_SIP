@@ -2,6 +2,7 @@ package gb28181
 
 import (
 	"28181sip/common"
+	"28181sip/client"
 	"crypto/md5"
 	"encoding/xml"
 	"fmt"
@@ -40,6 +41,7 @@ type ImageChunk struct {
 var (
 	// 使用 map 存储每个图片的分片数据
 	imageChunks = make(map[string]map[int]*ImageChunk)
+	trackInfo string
 	chunkMutex  = &sync.Mutex{}
 )
 
@@ -50,15 +52,14 @@ var (
  * @param request 请求信息
  * @return error 错误信息
  */
-
-func HandleInfo(config *Config, request string) error {
+ func HandleInfo(config *Config, request string) error {
 	fmt.Println("HandleInfo")
 	if Conn == nil {
 		return fmt.Errorf("全局连接未初始化")
 	}
 
 	// 解析SIP消息头
-	callIDRe := regexp.MustCompile(`Call-ID: (.+?)_(\d+)\r\n`)
+	callIDRe := regexp.MustCompile(`Call-ID: (.+?)(?:_(\d+))?\r\n`)
 	fromTagRe := regexp.MustCompile(`From:.*?tag=(.+?)\r\n`)
 	cseqRe := regexp.MustCompile(`CSeq: (\d+)`)
 	viaRe := regexp.MustCompile(`Via: (.+?)\r\n`)
@@ -68,12 +69,9 @@ func HandleInfo(config *Config, request string) error {
 	cseqMatches := cseqRe.FindStringSubmatch(request)
 	viaMatches := viaRe.FindStringSubmatch(request)
 
-	if len(callIDMatches) < 3 {
+	if len(callIDMatches) < 2 {
 		return fmt.Errorf("无法解析Call-ID")
 	}
-
-	imageID := callIDMatches[1]                     // 图片ID
-	chunkIndex, _ := strconv.Atoi(callIDMatches[2]) // 分片索引
 
 	// 提取XML内容
 	payloadStart := strings.Index(request, "\r\n\r\n") + 4
@@ -82,17 +80,53 @@ func HandleInfo(config *Config, request string) error {
 	}
 	xmlContent := request[payloadStart:]
 
+	// 检查是否为轨迹信息（通过检查XML中是否包含Track标签）
+	if strings.Contains(xmlContent, "<Track>") {
+		fmt.Println("收到轨迹信息:")
+		// 解析XML以获取TrackInfo内容
+		trackRe := regexp.MustCompile(`<TrackInfo>(.*?)</TrackInfo>`)
+		if matches := trackRe.FindStringSubmatch(xmlContent); len(matches) > 1 {
+			trackInfo = matches[1]
+			fmt.Printf("轨迹信息内容: %s\n", trackInfo)
+			common.Debug("轨迹信息内容: %s\n", trackInfo)
+		}
+
+		// 发送200 OK响应
+		response200 := fmt.Sprintf(
+			"SIP/2.0 200 OK\r\n"+
+				"Via: %s\r\n"+
+				"From: <sip:%s@%s>;tag=%s\r\n"+
+				"To: <sip:%s@%s>;tag=to-%d\r\n"+
+				"Call-ID: %s\r\n"+
+				"CSeq: %s INFO\r\n"+
+				"Content-Length: 0\r\n\r\n",
+			viaMatches[1],
+			config.ServerID, config.ServerIP, fromTagMatches[1],
+			config.DeviceID, config.LocalIP, time.Now().UnixNano(),
+			callIDMatches[1],
+			cseqMatches[1],
+		)
+
+		_, err := Conn.Write([]byte(response200))
+		if err != nil {
+			return fmt.Errorf("发送轨迹信息200 OK响应失败: %v", err)
+		}
+
+		return nil
+	}
+
+	// 处理图片分片
+	imageID := callIDMatches[1]
+	chunkIndex, _ := strconv.Atoi(callIDMatches[2])
+
 	// 打印XML内容以便调试
-	fmt.Printf("XML Content: %s\n", xmlContent)
+	// fmt.Printf("XML Content: %s\n", xmlContent)
 
 	// 解析XML数据
 	var imgData ImageData
 	if err := xml.Unmarshal([]byte(xmlContent), &imgData); err != nil {
 		return fmt.Errorf("解析XML失败: %v", err)
 	}
-
-	// 打印解析后的结构体以便调试
-	fmt.Printf("Parsed ImageData: %+v\n", imgData)
 
 	// 处理分片数据
 	chunkMutex.Lock()
@@ -107,17 +141,18 @@ func HandleInfo(config *Config, request string) error {
 	imageChunks[imageID][chunkIndex] = &ImageChunk{
 		Data:        imgData.ImageData,
 		ChunkIndex:  chunkIndex,
-		TotalChunks: imgData.TotalChunks, // 使用 XML 中的 TotalChunks
+		TotalChunks: imgData.TotalChunks,
 		Timestamp:   time.Now(),
 	}
 
-	fmt.Printf("已接收图片分片: ID=%s, 索引=%d, 总分片数=%d\n", imageID, chunkIndex, imgData.TotalChunks)
+	// fmt.Printf("已接收图片分片: ID=%s, 索引=%d, 总分片数=%d\n", imageID, chunkIndex, imgData.TotalChunks)
+	common.Debug("已接收图片分片: ID=%s, 索引=%d, 总分片数=%d\n", imageID, chunkIndex, imgData.TotalChunks)
 
 	// 检查是否所有分片都已接收
 	chunks := imageChunks[imageID]
-	fmt.Printf("len(chunks):%#v \n", len(chunks))
-	fmt.Printf("TotalChunks:%#v \n", imgData.TotalChunks)
-	if len(chunks) == imgData.TotalChunks { // 动态判断是否收到所有分片
+	// fmt.Printf("len(chunks):%#v \n", len(chunks))
+	// fmt.Printf("TotalChunks:%#v \n", imgData.TotalChunks)
+	if len(chunks) == imgData.TotalChunks {
 		// 按顺序合并分片
 		var completeImage strings.Builder
 		for i := 0; i < imgData.TotalChunks; i++ {
@@ -131,14 +166,22 @@ func HandleInfo(config *Config, request string) error {
 
 		// 保存完整图片数据
 		completeImageData := completeImage.String()
-		fmt.Printf("图片接收完成: ID=%s, 总分片数=%d\n", imageID, len(chunks))
+		// fmt.Printf("图片接收完成: ID=%s, 总分片数=%d\n", imageID, len(chunks))
+		common.Debug("图片接收完成: ID=%s, 总分片数=%d\n", imageID, len(chunks))
 		fmt.Printf("完整图片数据: %s\n", completeImageData)
+		fmt.Printf("trackInfo %#v\n", trackInfo)
+		/********************************接收到图片发送给视频网的vmp*******************************/
+		SendPostResponse, err := client.SendPostRequest(config.URL,completeImageData, trackInfo)
+		if err != nil {
+			fmt.Println("Error:", err)
+			return nil
+		}
+		// 打印响应
+		fmt.Println("SendPostResponse:", SendPostResponse)
+		/********************************接收到图片发送给视频网的vmp*******************************/
 
 		// 清理已处理的分片数据
 		delete(imageChunks, imageID)
-
-		// 这里可以添加保存或处理完整图片的代码
-		// 例如: saveImage(imageID, completeImageData)
 	}
 
 	// 发送200 OK响应
@@ -159,11 +202,124 @@ func HandleInfo(config *Config, request string) error {
 
 	_, err := Conn.Write([]byte(response200))
 	if err != nil {
-		return fmt.Errorf("发送200 OK响应失败: %v", err)
+		return fmt.Errorf("发送图片分片200 OK响应失败: %v", err)
 	}
 
 	return nil
 }
+// func HandleInfo(config *Config, request string) error {
+// 	fmt.Println("HandleInfo")
+// 	if Conn == nil {
+// 		return fmt.Errorf("全局连接未初始化")
+// 	}
+
+// 	// 解析SIP消息头
+// 	callIDRe := regexp.MustCompile(`Call-ID: (.+?)_(\d+)\r\n`)
+// 	fromTagRe := regexp.MustCompile(`From:.*?tag=(.+?)\r\n`)
+// 	cseqRe := regexp.MustCompile(`CSeq: (\d+)`)
+// 	viaRe := regexp.MustCompile(`Via: (.+?)\r\n`)
+
+// 	callIDMatches := callIDRe.FindStringSubmatch(request)
+// 	fromTagMatches := fromTagRe.FindStringSubmatch(request)
+// 	cseqMatches := cseqRe.FindStringSubmatch(request)
+// 	viaMatches := viaRe.FindStringSubmatch(request)
+
+// 	if len(callIDMatches) < 3 {
+// 		return fmt.Errorf("无法解析Call-ID")
+// 	}
+
+// 	imageID := callIDMatches[1]                     // 图片ID
+// 	chunkIndex, _ := strconv.Atoi(callIDMatches[2]) // 分片索引
+
+// 	// 提取XML内容
+// 	payloadStart := strings.Index(request, "\r\n\r\n") + 4
+// 	if payloadStart < 4 {
+// 		return fmt.Errorf("未找到XML负载")
+// 	}
+// 	xmlContent := request[payloadStart:]
+
+// 	// 打印XML内容以便调试
+// 	fmt.Printf("XML Content: %s\n", xmlContent)
+
+// 	// 解析XML数据
+// 	var imgData ImageData
+// 	if err := xml.Unmarshal([]byte(xmlContent), &imgData); err != nil {
+// 		return fmt.Errorf("解析XML失败: %v", err)
+// 	}
+
+// 	// 打印解析后的结构体以便调试
+// 	fmt.Printf("Parsed ImageData: %+v\n", imgData)
+
+// 	// 处理分片数据
+// 	chunkMutex.Lock()
+// 	defer chunkMutex.Unlock()
+
+// 	// 初始化图片分片存储
+// 	if _, exists := imageChunks[imageID]; !exists {
+// 		imageChunks[imageID] = make(map[int]*ImageChunk)
+// 	}
+
+// 	// 存储分片数据
+// 	imageChunks[imageID][chunkIndex] = &ImageChunk{
+// 		Data:        imgData.ImageData,
+// 		ChunkIndex:  chunkIndex,
+// 		TotalChunks: imgData.TotalChunks, // 使用 XML 中的 TotalChunks
+// 		Timestamp:   time.Now(),
+// 	}
+
+// 	fmt.Printf("已接收图片分片: ID=%s, 索引=%d, 总分片数=%d\n", imageID, chunkIndex, imgData.TotalChunks)
+
+// 	// 检查是否所有分片都已接收
+// 	chunks := imageChunks[imageID]
+// 	fmt.Printf("len(chunks):%#v \n", len(chunks))
+// 	fmt.Printf("TotalChunks:%#v \n", imgData.TotalChunks)
+// 	if len(chunks) == imgData.TotalChunks { // 动态判断是否收到所有分片
+// 		// 按顺序合并分片
+// 		var completeImage strings.Builder
+// 		for i := 0; i < imgData.TotalChunks; i++ {
+// 			if chunk, ok := chunks[i]; ok {
+// 				completeImage.WriteString(chunk.Data)
+// 			} else {
+// 				fmt.Printf("缺少分片: ID=%s, 索引=%d\n", imageID, i)
+// 				return nil
+// 			}
+// 		}
+
+// 		// 保存完整图片数据
+// 		completeImageData := completeImage.String()
+// 		fmt.Printf("图片接收完成: ID=%s, 总分片数=%d\n", imageID, len(chunks))
+// 		fmt.Printf("完整图片数据: %s\n", completeImageData)
+
+// 		// 清理已处理的分片数据
+// 		delete(imageChunks, imageID)
+
+// 		// 这里可以添加保存或处理完整图片的代码
+// 		// 例如: saveImage(imageID, completeImageData)
+// 	}
+
+// 	// 发送200 OK响应
+// 	response200 := fmt.Sprintf(
+// 		"SIP/2.0 200 OK\r\n"+
+// 			"Via: %s\r\n"+
+// 			"From: <sip:%s@%s>;tag=%s\r\n"+
+// 			"To: <sip:%s@%s>;tag=to-%d\r\n"+
+// 			"Call-ID: %s_%d\r\n"+
+// 			"CSeq: %s INFO\r\n"+
+// 			"Content-Length: 0\r\n\r\n",
+// 		viaMatches[1],
+// 		config.ServerID, config.ServerIP, fromTagMatches[1],
+// 		config.DeviceID, config.LocalIP, time.Now().UnixNano(),
+// 		imageID, chunkIndex,
+// 		cseqMatches[1],
+// 	)
+
+// 	_, err := Conn.Write([]byte(response200))
+// 	if err != nil {
+// 		return fmt.Errorf("发送200 OK响应失败: %v", err)
+// 	}
+
+// 	return nil
+// }
 
 /**接收小文件的版本
 var (
@@ -242,6 +398,7 @@ type Config struct {
 	DomainID          string `yaml:"domain_id"`          // 添加域ID配置
 	KeepaliveInterval int    `yaml:"keepalive_interval"` //心跳间隔时间
 	Password          string `yaml:"password"`           //密码
+	URL               string `yaml:"target_url"`         //URL
 }
 
 /**

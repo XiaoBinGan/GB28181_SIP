@@ -15,3 +15,8 @@ server_port: "5060" # 设备接收端的端口
 domain_id: "1000000000" # 添加域ID配置
 keepalive_interval: 30 # 保活消息的发送间隔（秒）
 password: ""  # 添加这行
+
+
+
+# 设备接收端需要转发的目标url
+target_url: "http://localhost:8080/api/task/track" # 设备接收端需要转发的目标URL
